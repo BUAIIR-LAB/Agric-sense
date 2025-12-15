@@ -1,0 +1,17 @@
+export const COMMON_CROPS = [
+  'Maize',
+  'Cassava',
+  'Beans',
+  'Coffee',
+  'Sorghum',
+  'Rice',
+  'Groundnuts',
+  'Sunflower',
+  'Cotton',
+  'Bananas (Matooke)',
+  'Sweet Potatoes',
+  'Soybeans',
+  'Millet',
+  'Tomatoes',
+  'Onions',
+] as const;
