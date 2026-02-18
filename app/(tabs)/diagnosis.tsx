@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { 
-  ActivityIndicator, 
-  Image, 
-  Platform, 
-  ScrollView, 
-  StyleSheet, 
-  Text, 
+import {
+  ActivityIndicator,
+  Image,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
   View,
   Alert,
   Animated,
@@ -20,35 +20,52 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { useAppContext, type DiagnosisRecord } from '@/context/AppContext';
+import { scheduleDiagnosisCompleteNotification } from '@/utils/notifications';
 import { palette } from '@/theme/colors';
-import { spacing, radius } from '@/theme/spacing';
+import { spacing, radius, getResponsiveSpacing } from '@/theme/spacing';
 import { typography } from '@/theme/typography';
 import { elevation } from '@/theme/elevation';
 import apiService from '@/services/api';
 import { ConfidenceGauge } from '@/components/charts/ConfidenceGauge';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { useResponsiveDimensions, responsiveFontSize, moderateScale } from '@/utils/responsive';
 
 const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
 
 type ScreenStep = 'capture' | 'processing' | 'results';
 
+// Language mapping for API and speech
+const languageToCode: Record<string, string> = {
+  English: 'en',
+  Luganda: 'lg',
+  Ateso: 'at',
+  Japadhola: 'jap',
+  Swahili: 'sw',
+  Runyankore: 'nyn',
+};
+
 export default function DiagnosisScreen() {
   const router = useRouter();
-  const { addDiagnosisRecord, profile } = useAppContext();
-  
+  const { addDiagnosisRecord, state } = useAppContext();
+  const profile = state.profile;
+  const { width: screenWidth, height: screenHeight, isSmall, deviceType } = useResponsiveDimensions();
+  const responsiveSpacing = getResponsiveSpacing();
+
   // State management
   const [currentStep, setCurrentStep] = useState<ScreenStep>('capture');
   const [imageUri, setImageUri] = useState<string | undefined>();
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisRecord | undefined>();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiMitigation, setAiMitigation] = useState<string | null>(null);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Animation for processing
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  
+
   useEffect(() => {
     if (isProcessing) {
       Animated.loop(
@@ -132,7 +149,7 @@ export default function DiagnosisScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaType.Images,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         quality: 0.8,
         aspect: [4, 3],
@@ -189,10 +206,12 @@ export default function DiagnosisScreen() {
       // Step 3: Send to API
       setProcessingProgress(60);
       const diagnosisResponse = await apiService.diagnoseFromImage(imageBase64);
-      
+
+      const isHealthyResponse = diagnosisResponse?.suspected_issues?.[0]?.toLowerCase().includes('healthy');
+
       // Step 4: Process results
       setProcessingProgress(80);
-      
+
       if (!diagnosisResponse || !diagnosisResponse.suspected_issues?.length) {
         throw new Error('Invalid response from diagnosis API');
       }
@@ -212,11 +231,26 @@ export default function DiagnosisScreen() {
       setDiagnosisResult(record);
       addDiagnosisRecord(record);
       setCurrentStep('results');
-      
+
+      const isHealthyResult = record.suspectedIssues[0]?.toLowerCase().includes('healthy');
+      const isInconclusiveResult = record.suspectedIssues[0]?.toLowerCase().includes('other');
+
+      // Fire diagnosis complete notification
+      scheduleDiagnosisCompleteNotification(
+        record.suspectedIssues[0] ?? 'Unknown issue',
+        record.confidence,
+        isHealthyResult,
+      );
+
       console.log('✅ Diagnosis complete');
+
+      // Trigger background AI mitigation guide if not healthy and not inconclusive
+      if (!isHealthyResult && !isInconclusiveResult) {
+        fetchAiMitigation(record.suspectedIssues[0]);
+      }
     } catch (error: any) {
       console.error('❌ Diagnosis error:', error);
-      
+
       let errorMessage = 'Diagnosis failed. Please try again.';
       if (error.message) {
         errorMessage = error.message;
@@ -227,7 +261,7 @@ export default function DiagnosisScreen() {
       } else if (error.message === 'Network Error' || error.code === 'ERR_NETWORK') {
         errorMessage = 'Network error. Please check your internet connection.';
       }
-      
+
       setError(errorMessage);
       setCurrentStep('capture');
     } finally {
@@ -236,10 +270,40 @@ export default function DiagnosisScreen() {
     }
   };
 
+  // Fetch AI mitigation guide in background
+  const fetchAiMitigation = async (disease: string) => {
+    if (!profile?.id) return;
+
+    setIsAiLoading(true);
+    setAiMitigation(null);
+
+    try {
+      const prompt = `My crop has been diagnosed with ${disease}. Please provide a professional, concise mitigation guide and best treatment steps for this specific issue. Use clear headings and bullet points.`;
+      const response = await apiService.askQuestion({
+        prompt,
+        user_id: profile.id,
+        target_lang: languageToCode[profile.preferredLanguage] || 'en',
+      });
+
+      if (response && response.results) {
+        setAiMitigation(response.results);
+      }
+    } catch (error) {
+      console.error('❌ AI Mitigation error:', error);
+      setAiMitigation('Failed to load expert advice. Please try again later.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const isHealthy = diagnosisResult?.suspectedIssues[0]?.toLowerCase().includes('healthy');
+
   // Reset to start new diagnosis
   const resetDiagnosis = () => {
     setImageUri(undefined);
     setDiagnosisResult(undefined);
+    setAiMitigation(null);
+    setIsAiLoading(false);
     setError(null);
     setCurrentStep('capture');
     setProcessingProgress(0);
@@ -249,13 +313,6 @@ export default function DiagnosisScreen() {
   // Render capture step
   const renderCaptureStep = () => (
     <Animated.View style={[styles.stepContainer, { opacity: fadeAnim }]}>
-      <View style={styles.headerTextContainer}>
-        <Text style={styles.stepTitle}>Plant Diagnosis</Text>
-        <Text style={styles.stepSubtitle}>
-          Capture or upload an image of your crop for AI-powered analysis
-        </Text>
-      </View>
-
       {error && (
         <View style={styles.errorContainer}>
           <MaterialCommunityIcons name="alert-circle" size={22} color={palette.danger} />
@@ -266,8 +323,8 @@ export default function DiagnosisScreen() {
       <Card variant="elevated" style={styles.imageCard}>
         {imageUri ? (
           <Animated.View style={[styles.imageWrapper, { opacity: fadeAnim }]}>
-            <Image 
-              source={{ uri: imageUri }} 
+            <Image
+              source={{ uri: imageUri }}
               style={styles.previewImage}
               resizeMode="cover"
               onLoad={() => {
@@ -278,7 +335,7 @@ export default function DiagnosisScreen() {
                 setError('Failed to load image. Please try again.');
               }}
             />
-            <Pressable 
+            <Pressable
               style={styles.removeImageButton}
               onPress={resetDiagnosis}
               accessibilityLabel="Remove image"
@@ -287,7 +344,7 @@ export default function DiagnosisScreen() {
             </Pressable>
           </Animated.View>
         ) : (
-          <Pressable 
+          <Pressable
             style={styles.placeholder}
             onPress={captureFromCamera}
             accessibilityLabel="Capture image"
@@ -317,10 +374,10 @@ export default function DiagnosisScreen() {
             ]}
             onPress={imageUri ? resetDiagnosis : captureFromCamera}
           >
-            <MaterialCommunityIcons 
-              name="camera" 
-              size={22} 
-              color={imageUri ? palette.brandGreen : palette.white} 
+            <MaterialCommunityIcons
+              name="camera"
+              size={22}
+              color={imageUri ? palette.brandGreen : palette.white}
             />
             <Text style={[
               styles.actionButtonText,
@@ -329,7 +386,7 @@ export default function DiagnosisScreen() {
               {imageUri ? "Retake" : "Capture"}
             </Text>
           </Pressable>
-          
+
           <Pressable
             style={({ pressed }) => [
               styles.actionButton,
@@ -354,7 +411,7 @@ export default function DiagnosisScreen() {
             disabled={isProcessing}
           >
             <LinearGradient
-              colors={[palette.brandGreen, palette.brandGreenDark]}
+              colors={[palette.brandGreen || '#2E7D32', palette.brandGreenDark || '#1B5E20']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.analyzeButtonGradient}
@@ -380,25 +437,25 @@ export default function DiagnosisScreen() {
       <Card variant="elevated" style={styles.processingCard}>
         <Animated.View style={[styles.processingIconContainer, { transform: [{ scale: pulseAnim }] }]}>
           <LinearGradient
-            colors={[palette.brandGreen + '20', palette.brandGreenLight + '20']}
+            colors={[(palette.brandGreen || '#2E7D32') + '33', (palette.brandGreenLight || '#66BB6A') + '33']}
             style={styles.processingIconBackground}
           >
             <MaterialCommunityIcons name="robot" size={72} color={palette.brandGreen} />
           </LinearGradient>
         </Animated.View>
-        
+
         <Text style={styles.processingTitle}>Analyzing Your Crop</Text>
         <Text style={styles.processingSubtitle}>
           Our AI is examining your image for diseases and health issues
         </Text>
-        
+
         <View style={styles.progressContainer}>
           <View style={styles.progressBar}>
-            <Animated.View 
+            <Animated.View
               style={[
-                styles.progressFill, 
+                styles.progressFill,
                 { width: `${processingProgress}%` }
-              ]} 
+              ]}
             />
           </View>
           <Text style={styles.progressText}>{processingProgress}%</Text>
@@ -415,10 +472,10 @@ export default function DiagnosisScreen() {
                 styles.processingStepIcon,
                 processingProgress >= step.progress && styles.processingStepIconActive
               ]}>
-                <MaterialCommunityIcons 
-                  name={processingProgress >= step.progress ? "check-circle" : "circle-outline"} 
-                  size={24} 
-                  color={processingProgress >= step.progress ? palette.white : palette.gray300} 
+                <MaterialCommunityIcons
+                  name={processingProgress >= step.progress ? "check-circle" : "circle-outline"}
+                  size={24}
+                  color={processingProgress >= step.progress ? palette.white : palette.gray300}
                 />
               </View>
               <Text style={[
@@ -438,7 +495,10 @@ export default function DiagnosisScreen() {
   const renderResultsStep = () => {
     if (!diagnosisResult) return null;
 
-    const isHealthy = diagnosisResult.suspectedIssues[0]?.toLowerCase().includes('healthy');
+    const topIssue = diagnosisResult.suspectedIssues[0]?.toLowerCase() || '';
+    const isHealthy = topIssue.includes('healthy');
+    const isInconclusive = topIssue.includes('other');
+    const isDiseased = !isHealthy && !isInconclusive;
 
     return (
       <View style={styles.stepContainer}>
@@ -446,16 +506,22 @@ export default function DiagnosisScreen() {
           {/* Result Header */}
           <View style={styles.resultHeader}>
             <LinearGradient
-              colors={isHealthy ? [palette.success, '#66BB6A'] : [palette.warning, '#FFB74D']}
+              colors={
+                isHealthy
+                  ? [palette.semantic.success, palette.brandGreenLight]
+                  : isInconclusive
+                    ? [palette.gray500, palette.gray600]
+                    : [palette.semantic.warning, '#FFB74D']
+              }
               style={styles.resultStatusBadge}
             >
-              <MaterialCommunityIcons 
-                name={isHealthy ? "leaf-circle" : "alert-circle"} 
-                size={28} 
-                color={palette.white} 
+              <MaterialCommunityIcons
+                name={isHealthy ? "leaf-circle" : isInconclusive ? "camera-off" : "alert-circle"}
+                size={28}
+                color={palette.white}
               />
               <Text style={styles.resultStatusText}>
-                {isHealthy ? 'Healthy Crop' : 'Disease Detected'}
+                {isHealthy ? 'Healthy Crop' : isInconclusive ? 'Bad Image' : 'Disease Detected'}
               </Text>
             </LinearGradient>
             <Text style={styles.resultTimestamp}>
@@ -473,56 +539,70 @@ export default function DiagnosisScreen() {
           {/* Diagnosis Details */}
           <View style={styles.resultDetails}>
             <Text style={styles.resultDiseaseTitle}>
-              {diagnosisResult.suspectedIssues[0]}
+              {isInconclusive ? 'Low Quality Image' : diagnosisResult.suspectedIssues[0]}
             </Text>
-            
-            {diagnosisResult.suspectedIssues.length > 1 && (
-              <View style={styles.otherIssuesContainer}>
-                <Text style={styles.otherIssuesLabel}>Other suspected issues:</Text>
-                {diagnosisResult.suspectedIssues.slice(1).map((issue, index) => (
-                  <View key={index} style={styles.otherIssueItem}>
-                    <MaterialCommunityIcons name="circle-small" size={16} color={palette.brandGreen} />
-                    <Text style={styles.otherIssueText}>{issue}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
+
+
 
             {/* Confidence Gauge */}
             <View style={styles.confidenceSection}>
               <Text style={styles.confidenceLabel}>Confidence Level</Text>
-              <ConfidenceGauge 
-                confidence={diagnosisResult.confidence} 
+              <ConfidenceGauge
+                confidence={diagnosisResult.confidence}
                 size={140}
                 showLabel={true}
               />
             </View>
 
-            {/* Summary */}
-            <View style={styles.summarySection}>
-              <View style={styles.sectionHeader}>
-                <MaterialCommunityIcons name="information" size={20} color={palette.brandGreen} />
-                <Text style={styles.sectionTitle}>Summary</Text>
-              </View>
-              <Text style={styles.summaryText}>{diagnosisResult.summary}</Text>
-            </View>
+            {/* AI Mitigation Guide Section */}
+            {isDiseased && (
+              <View style={styles.summarySection}>
+                <View style={[styles.sectionHeader, { justifyContent: 'space-between' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                    <MaterialCommunityIcons name="robot" size={20} color={palette.brandGreen} />
+                    <Text style={styles.sectionTitle}>Expert Analysis & Mitigation</Text>
+                  </View>
+                  {isAiLoading && <ActivityIndicator size="small" color={palette.brandGreen} />}
+                </View>
 
-            {/* Recommendations */}
-            {diagnosisResult.recommendations.length > 0 && (
+                {isAiLoading ? (
+                  <View style={styles.aiLoadingContainer}>
+                    <View style={styles.skeletonLine} />
+                    <View style={styles.skeletonLine} />
+                    <View style={[styles.skeletonLine, { width: '80%' }]} />
+                  </View>
+                ) : aiMitigation ? (
+                  <Card variant="tinted" style={styles.aiResultCard}>
+                    <Text style={styles.aiResultText}>{aiMitigation}</Text>
+                  </Card>
+                ) : (
+                  <Text style={styles.summaryText}>
+                    {diagnosisResult.summary}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {/* Recommendations (Original but cleaner) */}
+            {isHealthy && diagnosisResult.summary && (
+              <View style={styles.summarySection}>
+                <View style={styles.sectionHeader}>
+                  <MaterialCommunityIcons name="information" size={20} color={palette.brandGreen} />
+                  <Text style={styles.sectionTitle}>Summary</Text>
+                </View>
+                <Text style={styles.summaryText}>{diagnosisResult.summary}</Text>
+              </View>
+            )}
+
+            {isHealthy && diagnosisResult.recommendations.length > 0 && (
               <View style={styles.recommendationsSection}>
                 <View style={styles.sectionHeader}>
                   <MaterialCommunityIcons name="lightbulb-on" size={20} color={palette.brandGreen} />
-                  <Text style={styles.sectionTitle}>Recommended Actions</Text>
+                  <Text style={styles.sectionTitle}>Recommendations</Text>
                 </View>
                 {diagnosisResult.recommendations.map((rec, index) => (
                   <View key={index} style={styles.recommendationItem}>
-                    <View style={styles.recommendationIcon}>
-                      <MaterialCommunityIcons 
-                        name="check-circle" 
-                        size={20} 
-                        color={palette.brandGreen} 
-                      />
-                    </View>
+                    <MaterialCommunityIcons name="check-circle" size={18} color={palette.brandGreen} />
                     <Text style={styles.recommendationText}>{rec}</Text>
                   </View>
                 ))}
@@ -537,28 +617,13 @@ export default function DiagnosisScreen() {
             style={({ pressed }) => [
               styles.resultActionButton,
               styles.secondaryActionButton,
+              { flex: 1 },
               pressed && styles.buttonPressed,
             ]}
             onPress={resetDiagnosis}
           >
-            <MaterialCommunityIcons name="refresh" size={22} color={palette.brandGreen} />
+            <MaterialCommunityIcons name="camera" size={20} color={palette.brandGreen} />
             <Text style={styles.resultActionButtonTextSecondary}>New Diagnosis</Text>
-          </Pressable>
-          
-          <Pressable
-            style={({ pressed }) => [
-              styles.resultActionButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={() => router.push('/(tabs)/chat')}
-          >
-            <LinearGradient
-              colors={[palette.brandGreen, palette.brandGreenDark]}
-              style={styles.resultActionButtonGradient}
-            >
-              <MaterialCommunityIcons name="message-text" size={22} color={palette.white} />
-              <Text style={styles.resultActionButtonText}>Ask Questions</Text>
-            </LinearGradient>
           </Pressable>
         </View>
       </View>
@@ -570,18 +635,17 @@ export default function DiagnosisScreen() {
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         {/* Hero Section */}
         <LinearGradient
-          colors={[palette.brandGreen, palette.brandGreenDark]}
+          colors={[palette.brandGreen || '#2E7D32', palette.brandGreenDark || '#1B5E20']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.heroSection}
         >
           <View style={styles.heroContent}>
             <View style={styles.logoBadge}>
-              <MaterialCommunityIcons name="microscope" size={40} color={palette.white} />
+              <MaterialCommunityIcons name="microscope" size={moderateScale(36)} color={palette.white} />
             </View>
-            <Text style={styles.heroSubtitle}>
-              AI-powered plant health analysis
-            </Text>
+            <Text style={styles.heroTitle}>Crop Diagnosis</Text>
+
           </View>
         </LinearGradient>
 
@@ -602,65 +666,87 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5FBF6',
   },
   scrollContainer: {
-    paddingBottom: spacing.xxl * 2,
+    paddingBottom: moderateScale(48),
   },
   heroSection: {
-    paddingTop: spacing.xxl * 2,
-    paddingBottom: spacing.xxl * 1.5,
-    paddingHorizontal: spacing.xl,
-    borderBottomLeftRadius: spacing.xl * 2,
-    borderBottomRightRadius: spacing.xl * 2,
+    paddingTop: moderateScale(48),
+    paddingBottom: moderateScale(24),
+    paddingHorizontal: moderateScale(24),
+    borderBottomLeftRadius: moderateScale(32),
+    borderBottomRightRadius: moderateScale(32),
   },
   heroContent: {
     alignItems: 'center',
-    gap: spacing.md,
+    gap: moderateScale(8),
   },
   logoBadge: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    width: moderateScale(72),
+    height: moderateScale(72),
+    borderRadius: moderateScale(36),
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 12,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 6,
+    marginBottom: moderateScale(4),
+  },
+  heroTitle: {
+    fontFamily: appFont,
+    fontSize: responsiveFontSize(26),
+    fontWeight: '800',
+    color: palette.white,
+    textAlign: 'center',
+    letterSpacing: 0.3,
   },
   heroSubtitle: {
     fontFamily: appFont,
-    fontSize: 15,
-    lineHeight: 22,
-    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: responsiveFontSize(14),
+    lineHeight: responsiveFontSize(20),
+    color: 'rgba(255, 255, 255, 0.8)',
     textAlign: 'center',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: moderateScale(12),
+    marginBottom: moderateScale(8),
+  },
+  heroFeatures: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.15)',
+    gap: spacing.md,
+    width: '100%',
+  },
+  heroFeatureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  heroFeatureText: {
+    fontFamily: appFont,
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.85)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  heroFeatureDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
   },
   contentSection: {
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
+    paddingTop: spacing.xl,
     gap: spacing.xl,
   },
   stepContainer: {
     gap: spacing.lg,
-  },
-  headerTextContainer: {
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  stepTitle: {
-    ...typography.heading.h3,
-    color: palette.text.primary,
-    textAlign: 'center',
-    fontWeight: '700',
-  },
-  stepSubtitle: {
-    ...typography.body.medium,
-    color: palette.text.secondary,
-    textAlign: 'center',
-    lineHeight: 20,
   },
   errorContainer: {
     flexDirection: 'row',
@@ -685,7 +771,6 @@ const styles = StyleSheet.create({
   imageWrapper: {
     borderRadius: radius.xl,
     overflow: 'hidden',
-    backgroundColor: palette.surface.soft,
     width: '100%',
     minHeight: 320,
     shadowColor: '#000',
@@ -697,7 +782,6 @@ const styles = StyleSheet.create({
   previewImage: {
     width: '100%',
     height: 320,
-    backgroundColor: palette.surface.soft,
   },
   removeImageButton: {
     position: 'absolute',
@@ -766,7 +850,7 @@ const styles = StyleSheet.create({
   },
   galleryButton: {
     backgroundColor: palette.white,
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderColor: palette.brandGreen,
   },
   actionButtonText: {
@@ -920,7 +1004,6 @@ const styles = StyleSheet.create({
   resultImage: {
     width: '100%',
     height: 280,
-    backgroundColor: palette.surface.soft,
   },
   resultDetails: {
     gap: spacing.lg,
@@ -934,7 +1017,6 @@ const styles = StyleSheet.create({
   otherIssuesContainer: {
     gap: spacing.sm,
     padding: spacing.lg,
-    backgroundColor: palette.surface.soft,
     borderRadius: radius.lg,
   },
   otherIssuesLabel: {
@@ -956,7 +1038,6 @@ const styles = StyleSheet.create({
   confidenceSection: {
     alignItems: 'center',
     padding: spacing.xl,
-    backgroundColor: palette.surface.soft,
     borderRadius: radius.xl,
   },
   confidenceLabel: {
@@ -975,7 +1056,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   sectionTitle: {
-    ...typography.heading.h5,
     color: palette.text.primary,
     fontWeight: '700',
   },
@@ -992,7 +1072,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: spacing.md,
     padding: spacing.md,
-    backgroundColor: palette.surface.soft,
     borderRadius: radius.lg,
   },
   recommendationIcon: {
@@ -1006,7 +1085,7 @@ const styles = StyleSheet.create({
   },
   resultActions: {
     flexDirection: 'row',
-    gap: spacing.md,
+    gap: spacing.sm,
     marginTop: spacing.lg,
   },
   resultActionButton: {
@@ -1014,36 +1093,61 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 3,
   },
   secondaryActionButton: {
     backgroundColor: palette.white,
-    borderWidth: 2,
-    borderColor: palette.brandGreen,
+    borderWidth: 1.5,
+    borderColor: palette.brandGreen + '40',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
+    gap: spacing.xs,
+    paddingVertical: spacing.md + 4,
+  },
+  mitigationButton: {
+    flex: 1.2,
   },
   resultActionButtonGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
+    gap: spacing.xs,
+    paddingVertical: spacing.md + 4,
   },
   resultActionButtonText: {
-    ...typography.label.large,
+    ...typography.label.medium,
     color: palette.white,
     fontWeight: '700',
   },
   resultActionButtonTextSecondary: {
-    ...typography.label.large,
+    ...typography.label.medium,
     color: palette.brandGreen,
     fontWeight: '700',
+  },
+  aiLoadingContainer: {
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+  },
+  skeletonLine: {
+    height: 12,
+    backgroundColor: palette.gray200,
+    borderRadius: radius.xs,
+    width: '100%',
+  },
+  aiResultCard: {
+    backgroundColor: '#F1F8E9',
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.brandGreen + '20',
+  },
+  aiResultText: {
+    ...typography.body.medium,
+    color: palette.text.primary,
+    lineHeight: 22,
   },
 });

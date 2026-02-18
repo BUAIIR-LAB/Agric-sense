@@ -9,7 +9,6 @@ import {
   Animated,
   Dimensions,
   FlatList,
-  ImageBackground,
   Platform,
   Pressable,
   RefreshControl,
@@ -26,9 +25,16 @@ import { StatTile } from '@/components/ui/StatTile';
 import { useAppContext } from '@/context/AppContext';
 import { MiniLineChart } from '@/components/charts/MiniLineChart';
 import { palette } from '@/theme/colors';
-import { radius, spacing } from '@/theme/spacing';
+import { radius, spacing, getResponsiveSpacing } from '@/theme/spacing';
 import { typography } from '@/theme/typography';
 import { elevation } from '@/theme/elevation';
+import { useResponsiveDimensions, responsiveFontSize, moderateScale } from '@/utils/responsive';
+import * as Haptics from 'expo-haptics';
+import { insightService, type DailyInsight } from '@/services/insightService';
+import {
+  scheduleDailyTipNotification,
+  scheduleWeatherAlertNotification,
+} from '@/utils/notifications';
 const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
 
 type HourlyForecast = {
@@ -84,89 +90,11 @@ export default function HomeScreen() {
   const [isWeatherLoading, setIsWeatherLoading] = useState(true);
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [hasLocationPermission, setHasLocationPermission] = useState<boolean | null>(null);
-  const [carouselIndex, setCarouselIndex] = useState(0);
-  const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const carouselRef = useRef<FlatList>(null);
-  const { width: screenWidth } = useWindowDimensions(); // Responsive width
-  const carouselIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  
-  // Calculate carousel item width responsively
-  // Account for: screen padding (20px each side) + card padding (20px each side) + slide margins (8px each side)
-  const carouselItemWidth = useMemo(() => {
-    const screenPadding = spacing.screen * 2; // Left and right screen padding
-    const cardPadding = spacing.screen * 2; // Left and right card padding
-    const slideMargins = spacing.xs * 4; // Left and right margins for each slide (2 slides visible edges)
-    return screenWidth - screenPadding - cardPadding - slideMargins;
-  }, [screenWidth]);
-
-  const latestDiagnosis = state.diagnosisHistory[0];
-  const latestSpectra = state.spectroscopyHistory[0];
-  const assistantNote = useMemo(
-    () =>
-      [...state.chatHistory]
-        .reverse()
-        .find((message) => message.role === 'assistant')?.content,
-    [state.chatHistory],
-  );
-
-  // Calculate trend data for last 7 days
-  const getTrendData = useMemo(() => {
-    const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    
-    const diagnosisTrend = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date(sevenDaysAgo.getTime() + i * 24 * 60 * 60 * 1000);
-      return state.diagnosisHistory.filter(
-        (d) => new Date(d.timestamp).toDateString() === date.toDateString()
-      ).length;
-    });
-    
-    const spectraTrend = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date(sevenDaysAgo.getTime() + i * 24 * 60 * 60 * 1000);
-      return state.spectroscopyHistory.filter(
-        (s) => new Date(s.timestamp).toDateString() === date.toDateString()
-      ).length;
-    });
-    
-    const chatTrend = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date(sevenDaysAgo.getTime() + i * 24 * 60 * 60 * 1000);
-      return state.chatHistory.filter(
-        (c) => new Date(c.timestamp).toDateString() === date.toDateString()
-      ).length;
-    });
-    
-    return { diagnosisTrend, spectraTrend, chatTrend };
-  }, [state.diagnosisHistory, state.spectroscopyHistory, state.chatHistory]);
-
-  const statCards = [
-    {
-      label: 'Diagnoses',
-      value: state.diagnosisHistory.length,
-      trendText: latestDiagnosis
-        ? `Last run ${new Date(latestDiagnosis.timestamp).toLocaleDateString()}`
-        : 'Run your first scan',
-      trendData: getTrendData.diagnosisTrend,
-      icon: <MaterialCommunityIcons name="microscope" size={20} color={palette.brandGreen} />,
-    },
-    {
-      label: 'Spectra',
-      value: state.spectroscopyHistory.length,
-      trendText: latestSpectra
-        ? `Last capture ${new Date(latestSpectra.timestamp).toLocaleDateString()}`
-        : 'Log a reading',
-      trendData: getTrendData.spectraTrend,
-      icon: <MaterialCommunityIcons name="chart-timeline-variant" size={20} color={palette.brandGreen} />,
-    },
-    {
-      label: 'Chats',
-      value: state.chatHistory.length,
-      trendText: assistantNote ? 'Assistant ready to help' : 'Start a conversation',
-      trendData: getTrendData.chatTrend,
-      icon: <MaterialCommunityIcons name="robot-outline" size={20} color={palette.brandGreen} />,
-    },
-  ] as const;
+  const [dailyInsight, setDailyInsight] = useState<DailyInsight | null>(null);
+  const [isInsightLoading, setIsInsightLoading] = useState(false);
+  const { width: screenWidth, height: screenHeight, isSmall, deviceType } = useResponsiveDimensions();
+  const responsiveSpacing = getResponsiveSpacing();
 
   // Save weather data to cache
   // This function caches the complete weather snapshot including:
@@ -201,7 +129,7 @@ export default function HomeScreen() {
           setIsWeatherLoading(false);
           return;
         }
-        
+
         setHasLocationPermission(true);
         const cached = await AsyncStorage.getItem(WEATHER_STORAGE_KEY);
         if (cached) {
@@ -281,14 +209,14 @@ export default function HomeScreen() {
           setIsWeatherLoading(false);
           return;
         }
-        
+
         // Permission granted
         setHasLocationPermission(true);
 
         // Get current position with error handling
         let position: Location.LocationObject;
         try {
-          position = await Location.getCurrentPositionAsync({ 
+          position = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
           });
         } catch (locationError: unknown) {
@@ -306,18 +234,18 @@ export default function HomeScreen() {
           // Re-throw if it's not a location error
           throw locationError;
         }
-        
+
         const { latitude, longitude } = position.coords;
-        
+
         // Try to get location label with timeout handling
         let locationLabel = 'Your area';
         try {
           // Wrap geocoding in a timeout promise
           const geocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
-          const timeoutPromise = new Promise((_, reject) => 
+          const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Geocoding timeout')), 3000)
           );
-          
+
           const geocode = await Promise.race([geocodePromise, timeoutPromise]) as Location.LocationGeocodedAddress[];
           const place = geocode?.[0];
           if (place) {
@@ -357,10 +285,10 @@ export default function HomeScreen() {
         const hourlyTimes = payload.hourly?.time || [];
         const hourlyTemps = payload.hourly?.temperature_2m || [];
         const hourlyCodes = payload.hourly?.weathercode || [];
-        
+
         const currentTimeIndex = hourlyTimes.findIndex((time: string) => time === currentTime);
         const next5Hours: HourlyForecast[] = [];
-        
+
         for (let i = 1; i <= 5 && currentTimeIndex + i < hourlyTimes.length; i++) {
           const hourIndex = currentTimeIndex + i;
           const hourCode = hourlyCodes[hourIndex] ?? 0;
@@ -415,6 +343,11 @@ export default function HomeScreen() {
         setWeather(snapshot);
         // Save to cache
         await saveWeatherCache(snapshot);
+        // Fire weather advisory for extreme conditions
+        scheduleWeatherAlertNotification(
+          snapshot.currentConditionLabel,
+          snapshot.currentTemperature
+        );
       } catch (error: unknown) {
         // Only log non-location errors to avoid stack traces for expected location issues
         if (error instanceof Error) {
@@ -426,9 +359,9 @@ export default function HomeScreen() {
         } else {
           console.error('Weather fetch failed', error);
         }
-        
+
         if (!isMounted) return;
-        
+
         // Check if it's a location error
         if (error instanceof Error) {
           const errorMessage = error.message.toLowerCase();
@@ -439,7 +372,7 @@ export default function HomeScreen() {
             return;
           }
         }
-        
+
         // Try to load cached data if available
         try {
           const cached = await AsyncStorage.getItem(WEATHER_STORAGE_KEY);
@@ -453,7 +386,7 @@ export default function HomeScreen() {
         } catch (cacheError) {
           console.warn('Failed to load cached weather', cacheError);
         }
-        
+
         const errorMessage = error instanceof Error && error.message.includes('internet')
           ? 'No internet connection'
           : 'Unable to load weather';
@@ -472,28 +405,29 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // Auto-scroll carousel every 8 seconds (slower)
+  // Fetch AI Daily Insight when weather is available
   useEffect(() => {
-    if (!weather || isWeatherLoading || isCarouselPaused) return;
+    if (weather && state.profile && !dailyInsight && !isInsightLoading) {
+      const fetchInsight = async () => {
+        setIsInsightLoading(true);
+        const insight = await insightService.getDailyInsight(
+          weather,
+          state.profile?.id || 'guest',
+          state.profile?.preferredLanguage || 'English'
+        );
+        if (insight) {
+          setDailyInsight(insight);
+          // Trigger a notification for the new tip if it's not from today's cache?
+          // For simplicity, we trigger it if it's the first fetch in this session
+          await scheduleDailyTipNotification('Daily Farming Tip 🌾', insight.tip);
+        }
+        setIsInsightLoading(false);
+      };
+      fetchInsight();
+    }
+  }, [weather, state.profile]);
 
-    const scrollToNext = () => {
-      if (isCarouselPaused) return;
-      setCarouselIndex((prevIndex) => {
-        const nextIndex = (prevIndex + 1) % 4;
-        carouselRef.current?.scrollToIndex({ index: nextIndex, animated: true });
-        return nextIndex;
-      });
-    };
 
-    // Start auto-scroll
-    carouselIntervalRef.current = setInterval(scrollToNext, 8000);
-
-    return () => {
-      if (carouselIntervalRef.current) {
-        clearInterval(carouselIntervalRef.current);
-      }
-    };
-  }, [weather, isWeatherLoading, isCarouselPaused]);
 
   // Refresh weather data
   const refreshWeather = async () => {
@@ -510,14 +444,14 @@ export default function HomeScreen() {
         setRefreshing(false);
         return;
       }
-      
+
       // Permission granted
       setHasLocationPermission(true);
 
       // Get current position with error handling
       let position: Location.LocationObject;
       try {
-        position = await Location.getCurrentPositionAsync({ 
+        position = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
       } catch (locationError: unknown) {
@@ -535,18 +469,18 @@ export default function HomeScreen() {
         // Re-throw if it's not a location error
         throw locationError;
       }
-      
+
       const { latitude, longitude } = position.coords;
-      
+
       // Try to get location label with timeout handling
       let locationLabel = 'Your area';
       try {
         // Wrap geocoding in a timeout promise
         const geocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Geocoding timeout')), 3000)
         );
-        
+
         const geocode = await Promise.race([geocodePromise, timeoutPromise]) as Location.LocationGeocodedAddress[];
         const place = geocode?.[0];
         if (place) {
@@ -598,10 +532,10 @@ export default function HomeScreen() {
       const hourlyTimes = payload.hourly?.time || [];
       const hourlyTemps = payload.hourly?.temperature_2m || [];
       const hourlyCodes = payload.hourly?.weathercode || [];
-      
+
       const currentTimeIndex = hourlyTimes.findIndex((time: string) => time === currentTime);
       const next5Hours: HourlyForecast[] = [];
-      
+
       for (let i = 1; i <= 5 && currentTimeIndex + i < hourlyTimes.length; i++) {
         const hourIndex = currentTimeIndex + i;
         const hourCode = hourlyCodes[hourIndex] ?? 0;
@@ -648,6 +582,11 @@ export default function HomeScreen() {
 
       setWeather(snapshot);
       await saveWeatherCache(snapshot);
+      // Fire weather advisory for extreme conditions
+      scheduleWeatherAlertNotification(
+        snapshot.currentConditionLabel,
+        snapshot.currentTemperature
+      );
     } catch (error: unknown) {
       // Only log non-location errors to avoid stack traces for expected location issues
       if (error instanceof Error) {
@@ -659,7 +598,7 @@ export default function HomeScreen() {
       } else {
         console.error('Weather refresh failed', error);
       }
-      
+
       // Check if it's a location error
       if (error instanceof Error) {
         const errorMessage = error.message.toLowerCase();
@@ -671,7 +610,7 @@ export default function HomeScreen() {
           return;
         }
       }
-      
+
       setWeatherError('Unable to refresh weather');
     } finally {
       setIsWeatherLoading(false);
@@ -685,8 +624,8 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView 
-        contentContainerStyle={styles.content} 
+      <ScrollView
+        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -718,42 +657,12 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {/* Subtitle */}
-            <Text style={styles.heroSubtitle}>
-              Your AI-powered agronomy assistant
-            </Text>
-
-            {/* Search Bar */}
-            <View style={styles.searchContainer}>
-              <View style={styles.searchIconContainer}>
-                <MaterialCommunityIcons name="magnify" size={22} color={palette.brandGreen} />
-              </View>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search crops, diseases, or advice..."
-                placeholderTextColor={palette.gray500}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                accessibilityLabel="Search"
-                returnKeyType="search"
-              />
-              {searchQuery.length > 0 && (
-                <Pressable
-                  onPress={() => setSearchQuery('')}
-                  style={styles.searchClear}
-                  accessibilityLabel="Clear search"
-                >
-                  <MaterialCommunityIcons name="close-circle" size={20} color={palette.gray400} />
-                </Pressable>
-              )}
-            </View>
-
             {/* Quick Stats */}
             <View style={styles.heroQuickStats}>
               <View style={styles.quickStatItem}>
                 <MaterialCommunityIcons name="microscope" size={18} color={palette.white} />
                 <Text style={styles.quickStatText}>{state.diagnosisHistory.length}</Text>
-                <Text style={styles.quickStatLabel}>Diagnose</Text>
+                <Text style={styles.quickStatLabel}>Diagnoses</Text>
               </View>
               <View style={styles.quickStatDivider} />
               <View style={styles.quickStatItem}>
@@ -771,426 +680,261 @@ export default function HomeScreen() {
           </View>
         </LinearGradient>
 
+        {/* Quick Actions Strip */}
+        <View style={styles.quickActionsContainer}>
+          <Pressable
+            style={[styles.quickActionBtn, styles.qaGreen]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/(tabs)/diagnosis');
+            }}
+            accessibilityLabel="Scan Crop"
+          >
+            <MaterialCommunityIcons name="microscope" size={22} color="#2E7D32" />
+            <Text style={[styles.qaLabel, { color: '#2E7D32' }]}>Scan</Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.quickActionBtn, styles.qaBlue]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/(tabs)/chat');
+            }}
+            accessibilityLabel="Ask AI"
+          >
+            <MaterialCommunityIcons name="robot" size={22} color="#1565C0" />
+            <Text style={[styles.qaLabel, { color: '#1565C0' }]}>Ask AI</Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.quickActionBtn, styles.qaAmber]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/(tabs)/history');
+            }}
+            accessibilityLabel="View history"
+          >
+            <MaterialCommunityIcons name="history" size={22} color="#BF360C" />
+            <Text style={[styles.qaLabel, { color: '#BF360C' }]}>History</Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.quickActionBtn, styles.qaPurple]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/library');
+            }}
+            accessibilityLabel="Open library"
+          >
+            <MaterialCommunityIcons name="book-open-variant" size={22} color="#6A1B9A" />
+            <Text style={[styles.qaLabel, { color: '#6A1B9A' }]}>Library</Text>
+          </Pressable>
+        </View>
+
         {/* Weather Card - Only show if location permission is granted */}
         {hasLocationPermission !== false && (
           <View style={styles.weatherCardWrapper}>
-            <ImageBackground
-              source={{ uri: 'https://images.unsplash.com/photo-1500937386664-56d1dfef3854?w=1200&h=600&fit=crop&q=90' }}
+            <LinearGradient
+              colors={['#163d1a', '#1e5224', '#163d1a']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
               style={styles.weatherCardStandalone}
-              imageStyle={styles.weatherCardBackgroundImage}
             >
-            <View style={styles.weatherCardOverlay}>
-              {isWeatherLoading ? (
-                <View style={styles.weatherLoadingContainer}>
-                  <ActivityIndicator size="large" color={palette.white} />
-                  <Text style={[styles.weatherLoadingText, { color: palette.white }]}>Loading weather…</Text>
-          </View>
-              ) : weatherError ? (
-                <View style={styles.weatherErrorContainer}>
-                  <MaterialCommunityIcons name="wifi-off" size={48} color={palette.white} />
-                  <Text style={[styles.weatherErrorTitle, { color: palette.white }]}>Connection Issue</Text>
-                  <Text style={[styles.weatherError, { color: 'rgba(255,255,255,0.9)' }]}>{weatherError}</Text>
-                  <Text style={[styles.weatherErrorHint, { color: 'rgba(255,255,255,0.8)' }]}>
-                    App still available. Weather will update when connection is restored.
-                  </Text>
-                </View>
-              ) : weather ? (
-              <>
-                {/* Header with Location and Refresh */}
-                <View style={styles.weatherHeader}>
-                <View style={styles.weatherLocationContainer}>
-                  <MaterialCommunityIcons name="map-marker" size={18} color={palette.white} />
-                  <Text style={[styles.weatherLocation, { color: palette.white }]} numberOfLines={1}>
-                    {weather.locationLabel}
-                  </Text>
-                </View>
-                <View style={styles.weatherHeaderRight}>
-                  {weather.isCached && weather.cachedAt && (
-                    <View style={[styles.cachedIndicator, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
-                      <MaterialCommunityIcons name="clock-outline" size={14} color={palette.white} />
-                      <Text style={[styles.cachedIndicatorText, { color: palette.white }]}>
-                        {new Date(weather.cachedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                      </Text>
-                    </View>
-                  )}
-                  <Pressable 
-                    style={[styles.refreshButton, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
-                    onPress={refreshWeather}
-                    disabled={isWeatherLoading}
-                    accessibilityLabel="Refresh weather"
-                  >
-                    <MaterialCommunityIcons 
-                      name="refresh" 
-                      size={18} 
-                      color={palette.white} 
-                      style={isWeatherLoading && styles.refreshButtonSpinning}
-                    />
-                  </Pressable>
-                </View>
-          </View>
-
-              {/* Weather Carousel */}
-              <View style={styles.weatherCarouselContainer}>
-                <FlatList
-                  ref={carouselRef}
-                  data={[
-                    { type: 'today', data: weather },
-                    { type: 'hourly', data: weather.hourlyForecast },
-                    { type: 'tomorrow', data: weather },
-                    { type: 'fiveDay', data: weather.fiveDayForecast },
-                  ]}
-                  keyExtractor={(item, index) => `${item.type}-${index}`}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  snapToInterval={carouselItemWidth + spacing.xs * 2}
-                  snapToAlignment="center"
-                  decelerationRate="fast"
-                  contentContainerStyle={{ paddingHorizontal: spacing.xs }}
-                  getItemLayout={(data, index) => ({
-                    length: carouselItemWidth + spacing.xs * 2,
-                    offset: (carouselItemWidth + spacing.xs * 2) * index,
-                    index,
-                  })}
-                  onMomentumScrollEnd={(event) => {
-                    const itemWidth = carouselItemWidth + spacing.xs * 2;
-                    const index = Math.round(event.nativeEvent.contentOffset.x / itemWidth);
-                    setCarouselIndex(index);
-                    setIsCarouselPaused(false);
-                    if (carouselIntervalRef.current) {
-                      clearInterval(carouselIntervalRef.current);
-                    }
-                    carouselIntervalRef.current = setInterval(() => {
-                      setCarouselIndex((prevIndex) => {
-                        const nextIndex = (prevIndex + 1) % 4;
-                        carouselRef.current?.scrollToIndex({ index: nextIndex, animated: true });
-                        return nextIndex;
-                      });
-                    }, 8000);
-                  }}
-                  onTouchStart={() => setIsCarouselPaused(true)}
-                  onTouchEnd={() => {
-                    setTimeout(() => setIsCarouselPaused(false), 3000);
-                  }}
-                  onScrollToIndexFailed={(info) => {
-                    const wait = new Promise((resolve) => setTimeout(resolve, 500));
-                    wait.then(() => {
-                      carouselRef.current?.scrollToIndex({ index: info.index, animated: true });
-                    });
-                  }}
-                  renderItem={({ item }) => {
-                    if (item.type === 'today') {
-                      return (
-                        <View style={[styles.weatherCarouselSlide, { width: carouselItemWidth }]}>
-                          <LinearGradient
-                            colors={['rgba(46, 125, 50, 0.95)', 'rgba(27, 94, 32, 0.98)']}
-                            style={styles.weatherSlideGradient}
-                          >
-                            <View style={styles.weatherSlideContent}>
-                              <View style={styles.weatherSlideHeader}>
-                                <View style={styles.weatherSlideHeaderIcon}>
-                                  <MaterialCommunityIcons name="weather-sunny" size={22} color={palette.white} />
-                                </View>
-                                <Text style={styles.weatherSlideTitle}>Today's Weather</Text>
-                              </View>
-                              
-                              <View style={styles.weatherTodayMain}>
-                                <MaterialCommunityIcons
-                                  name={weather.currentConditionIcon}
-                                  size={72}
-                                  color={palette.white}
-                                />
-                                <View style={styles.weatherTemperatureContainer}>
-                                  <Text style={styles.weatherTemperature}>{Math.round(weather.currentTemperature)}</Text>
-                                  <Text style={styles.weatherTemperatureUnit}>°C</Text>
-                                </View>
-                              </View>
-                              
-                              <Text style={styles.weatherCondition}>
-                                {weather.currentConditionLabel.charAt(0).toUpperCase() + weather.currentConditionLabel.slice(1)}
-                              </Text>
-                              
-                              <View style={styles.weatherTodayMetrics}>
-                                <View style={styles.weatherTodayMetricCard}>
-                                  <MaterialCommunityIcons name="arrow-up" size={18} color={palette.brandGreen} />
-                                  <Text style={styles.weatherTodayMetricValue}>{Math.round(weather.todayHigh ?? 0)}°</Text>
-                                  <Text style={styles.weatherTodayMetricLabel}>High</Text>
-                                </View>
-                                <View style={styles.weatherTodayMetricCard}>
-                                  <MaterialCommunityIcons name="arrow-down" size={18} color={palette.brandGreen} />
-                                  <Text style={styles.weatherTodayMetricValue}>{Math.round(weather.todayLow ?? 0)}°</Text>
-                                  <Text style={styles.weatherTodayMetricLabel}>Low</Text>
-                                </View>
-                                <View style={styles.weatherTodayMetricCard}>
-                                  <MaterialCommunityIcons name="weather-windy" size={18} color={palette.brandGreen} />
-                                  <Text style={styles.weatherTodayMetricValue}>{Math.round(weather.currentWindspeed)}</Text>
-                                  <Text style={styles.weatherTodayMetricLabel}>km/h</Text>
-                                </View>
-                                <View style={styles.weatherTodayMetricCard}>
-                                  <MaterialCommunityIcons name="water-percent" size={18} color={palette.brandGreen} />
-                                  <Text style={styles.weatherTodayMetricValue}>{Math.round(weather.currentHumidity)}</Text>
-                                  <Text style={styles.weatherTodayMetricLabel}>Humidity</Text>
-                                </View>
-                              </View>
-                            </View>
-                          </LinearGradient>
-                        </View>
-                      );
-                    }
-                    if (item.type === 'hourly') {
-                      return (
-                        <View style={[styles.weatherCarouselSlide, { width: carouselItemWidth }]}>
-                          <LinearGradient
-                            colors={['rgba(46, 125, 50, 0.95)', 'rgba(27, 94, 32, 0.98)']}
-                            style={styles.weatherSlideGradient}
-                          >
-                            <View style={styles.weatherSlideContent}>
-                              <View style={styles.weatherSlideHeader}>
-                                <View style={styles.weatherSlideHeaderIcon}>
-                                  <MaterialCommunityIcons name="clock-time-four-outline" size={22} color={palette.white} />
-                                </View>
-                                <Text style={styles.weatherSlideTitle}>Hourly Forecast</Text>
-                              </View>
-                              
-                              <View style={styles.weatherHourlyList}>
-                                {(item.data as HourlyForecast[]).map((hour: HourlyForecast, index: number) => {
-                                  const hourDate = new Date(hour.time);
-                                  const hourStr = hourDate.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true });
-                                  return (
-                                    <View key={index} style={styles.weatherHourlyItem}>
-                                      <Text style={styles.weatherHourlyTime}>{hourStr}</Text>
-                                      <MaterialCommunityIcons name={hour.conditionIcon} size={28} color={palette.white} />
-                                      <Text style={styles.weatherHourlyTemp}>{Math.round(hour.temperature)}°</Text>
-                                      <Text style={styles.weatherHourlyCondition} numberOfLines={1}>
-                                        {hour.conditionLabel}
-                                      </Text>
-                                    </View>
-                                  );
-                                })}
-                              </View>
-                            </View>
-                          </LinearGradient>
-                        </View>
-                      );
-                    }
-                    if (item.type === 'tomorrow') {
-                      return (
-                        <View style={[styles.weatherCarouselSlide, { width: carouselItemWidth }]}>
-                          <LinearGradient
-                            colors={['rgba(46, 125, 50, 0.95)', 'rgba(27, 94, 32, 0.98)']}
-                            style={styles.weatherSlideGradient}
-                          >
-                            <View style={styles.weatherSlideContent}>
-                              <View style={styles.weatherSlideHeader}>
-                                <View style={styles.weatherSlideHeaderIcon}>
-                                  <MaterialCommunityIcons name="calendar-arrow-right" size={22} color={palette.white} />
-                                </View>
-                                <Text style={styles.weatherSlideTitle}>Tomorrow</Text>
-                              </View>
-                              
-                              <View style={styles.weatherTomorrowContent}>
-                                <MaterialCommunityIcons
-                                  name={weather.tomorrowConditionIcon ?? 'weather-cloudy'}
-                                  size={72}
-                                  color={palette.white}
-                                />
-                                <View style={styles.weatherTomorrowTemps}>
-                                  <View style={styles.weatherTomorrowTempCard}>
-                                    <MaterialCommunityIcons name="arrow-up" size={20} color={palette.brandGreenLight} />
-                                    <Text style={styles.weatherTomorrowTempValue}>{Math.round(weather.tomorrowHigh ?? 0)}°</Text>
-                                    <Text style={styles.weatherTomorrowTempLabel}>High</Text>
-                                  </View>
-                                  <View style={styles.weatherTomorrowTempCard}>
-                                    <MaterialCommunityIcons name="arrow-down" size={20} color={palette.brandGreenLight} />
-                                    <Text style={styles.weatherTomorrowTempValue}>{Math.round(weather.tomorrowLow ?? 0)}°</Text>
-                                    <Text style={styles.weatherTomorrowTempLabel}>Low</Text>
-                                  </View>
-                                </View>
-                                <Text style={styles.weatherCondition}>
-                                  {weather.tomorrowConditionLabel
-                                    ? weather.tomorrowConditionLabel.charAt(0).toUpperCase() + weather.tomorrowConditionLabel.slice(1)
-                                    : 'Clear skies'}
-                                </Text>
-                              </View>
-                            </View>
-                          </LinearGradient>
-                        </View>
-                      );
-                    }
-                    if (item.type === 'fiveDay') {
-                      return (
-                        <View style={[styles.weatherCarouselSlide, { width: carouselItemWidth }]}>
-                          <LinearGradient
-                            colors={['rgba(46, 125, 50, 0.95)', 'rgba(27, 94, 32, 0.98)']}
-                            style={styles.weatherSlideGradient}
-                          >
-                            <View style={styles.weatherSlideContent}>
-                              <View style={styles.weatherSlideHeader}>
-                                <View style={styles.weatherSlideHeaderIcon}>
-                                  <MaterialCommunityIcons name="calendar-range" size={22} color={palette.white} />
-                                </View>
-                                <Text style={styles.weatherSlideTitle}>5-Day Forecast</Text>
-                              </View>
-                              
-                              <View style={styles.weatherFiveDayList}>
-                                {(item.data as DailyForecast[]).map((day: DailyForecast, index: number) => {
-                                  const dayDate = new Date(day.date);
-                                  const dayName = dayDate.toLocaleDateString('en-US', { weekday: 'short' });
-                                  const dayNumber = dayDate.getDate();
-                                  const isToday = index === 0;
-                                  return (
-                                    <View key={index} style={styles.weatherFiveDayItem}>
-                                      <View style={styles.weatherFiveDayLeft}>
-                                        <Text style={styles.weatherFiveDayName}>{isToday ? 'Today' : dayName}</Text>
-                                        <Text style={styles.weatherFiveDayDate}>{dayNumber}</Text>
-                                      </View>
-                                      <MaterialCommunityIcons name={day.conditionIcon} size={28} color={palette.white} />
-                                      <View style={styles.weatherFiveDayTemps}>
-                                        <Text style={styles.weatherFiveDayHigh}>{Math.round(day.high)}°</Text>
-                                        <Text style={styles.weatherFiveDayLow}>{Math.round(day.low)}°</Text>
-                                      </View>
-                                    </View>
-                                  );
-                                })}
-                              </View>
-                            </View>
-                          </LinearGradient>
-                        </View>
-                      );
-                    }
-                    return null;
-                  }}
-                />
-                {/* Pagination Indicators */}
-                <View style={styles.weatherPaginationContainer}>
-                  <View style={styles.weatherPagination}>
-                    {[0, 1, 2, 3].map((index) => (
-                      <View
-                        key={index}
-                        style={[
-                          styles.weatherPaginationDot,
-                          carouselIndex === index && styles.weatherPaginationDotActive,
-                        ]}
-                      />
-                    ))}
+              <View style={styles.weatherCardInner}>
+                {isWeatherLoading ? (
+                  <View style={styles.weatherLoadingContainer}>
+                    <ActivityIndicator size="large" color={palette.white} />
+                    <Text style={[styles.weatherLoadingText, { color: palette.white }]}>Loading weather…</Text>
                   </View>
-                </View>
+                ) : weatherError ? (
+                  <View style={styles.weatherErrorContainer}>
+                    <MaterialCommunityIcons name="wifi-off" size={48} color={palette.white} />
+                    <Text style={[styles.weatherErrorTitle, { color: palette.white }]}>Connection Issue</Text>
+                    <Text style={[styles.weatherError, { color: 'rgba(255,255,255,0.9)' }]}>{weatherError}</Text>
+                    <Text style={[styles.weatherErrorHint, { color: 'rgba(255,255,255,0.8)' }]}>
+                      App still available. Weather will update when connection is restored.
+                    </Text>
+                  </View>
+                ) : weather ? (
+                  <>
+                    {/* Header with Location and Refresh */}
+                    <View style={styles.weatherHeader}>
+                      <View style={styles.weatherLocationContainer}>
+                        <MaterialCommunityIcons name="map-marker" size={18} color={palette.white} />
+                        <Text style={[styles.weatherLocation, { color: palette.white }]} numberOfLines={1}>
+                          {weather.locationLabel}
+                        </Text>
+                      </View>
+                      <View style={styles.weatherHeaderRight}>
+                        {weather.isCached && weather.cachedAt && (
+                          <View style={[styles.cachedIndicator, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+                            <MaterialCommunityIcons name="clock-outline" size={14} color={palette.white} />
+                            <Text style={[styles.cachedIndicatorText, { color: palette.white }]}>
+                              {new Date(weather.cachedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                            </Text>
+                          </View>
+                        )}
+                        <Pressable
+                          style={[styles.refreshButton, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
+                          onPress={refreshWeather}
+                          disabled={isWeatherLoading}
+                          accessibilityLabel="Refresh weather"
+                        >
+                          <MaterialCommunityIcons
+                            name="refresh"
+                            size={18}
+                            color={palette.white}
+                            style={isWeatherLoading && styles.refreshButtonSpinning}
+                          />
+                        </Pressable>
+                      </View>
+                    </View>
+
+                    {/* Compact Weather Card */}
+                    <View style={styles.weatherCompactCard}>
+                      <LinearGradient
+                        colors={['rgba(46, 125, 50, 0.95)', 'rgba(27, 94, 32, 0.98)']}
+                        style={styles.weatherCompactGradient}
+                      >
+                        {/* Main Current Weather Section */}
+                        <View style={styles.weatherMainSection}>
+                          <View style={styles.weatherCurrentInfo}>
+                            <View style={styles.weatherTempRow}>
+                              <MaterialCommunityIcons
+                                name={weather.currentConditionIcon}
+                                size={48}
+                                color={palette.white}
+                              />
+                              <Text style={styles.weatherTempLarge}>
+                                {Math.round(weather.currentTemperature)}°
+                              </Text>
+                            </View>
+                            <Text style={styles.weatherConditionLabel}>
+                              {weather.currentConditionLabel}
+                            </Text>
+                          </View>
+
+                          {/* Key Metrics Grid */}
+                          <View style={styles.weatherMetricsGrid}>
+                            <View style={styles.weatherMetricItem}>
+                              <MaterialCommunityIcons name="arrow-up-down" size={16} color={palette.brandGreenLight} />
+                              <Text style={styles.weatherMetricValue}>
+                                {Math.round(weather.todayHigh ?? 0)}°/{Math.round(weather.todayLow ?? 0)}°
+                              </Text>
+                            </View>
+                            <View style={styles.weatherMetricItem}>
+                              <MaterialCommunityIcons name="weather-windy" size={16} color={palette.brandGreenLight} />
+                              <Text style={styles.weatherMetricValue}>
+                                {Math.round(weather.currentWindspeed)} <Text style={styles.weatherMetricUnit}>km/h</Text>
+                              </Text>
+                            </View>
+                            <View style={styles.weatherMetricItem}>
+                              <MaterialCommunityIcons name="water-percent" size={16} color={palette.brandGreenLight} />
+                              <Text style={styles.weatherMetricValue}>
+                                {Math.round(weather.currentHumidity)}%
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+
+                        {/* Divider */}
+                        <View style={styles.weatherDivider} />
+
+                        {/* Hourly & Tomorrow Section */}
+                        <View style={styles.weatherForecastSection}>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.weatherHourlyContainer}
+                          >
+                            {weather.hourlyForecast.map((hour, index) => (
+                              <View key={index} style={styles.weatherHourlyCompactItem}>
+                                <Text style={styles.weatherHourlyTimeCompact}>
+                                  {new Date(hour.time).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })}
+                                </Text>
+                                <MaterialCommunityIcons name={hour.conditionIcon} size={20} color={palette.white} />
+                                <Text style={styles.weatherHourlyTempCompact}>{Math.round(hour.temperature)}°</Text>
+                              </View>
+                            ))}
+
+                            {/* Tomorrow Preview at the end */}
+                            <View style={styles.weatherTomorrowCompact}>
+                              <Text style={styles.weatherHourlyTimeCompact}>Tom</Text>
+                              <MaterialCommunityIcons name={weather.tomorrowConditionIcon ?? 'weather-cloudy'} size={20} color={palette.brandGreenLight} />
+                              <Text style={styles.weatherHourlyTempCompact}>{Math.round(weather.tomorrowHigh ?? 0)}°</Text>
+                            </View>
+                          </ScrollView>
+                        </View>
+                      </LinearGradient>
+                    </View>
+
+                  </>
+                ) : (
+                  <View style={styles.weatherLoadingContainer}>
+                    <ActivityIndicator size="large" color={palette.white} />
+                    <Text style={[styles.weatherLoadingText, { color: palette.white }]}>Loading weather…</Text>
+                  </View>
+                )}
               </View>
-            </>
-          ) : (
-            <View style={styles.weatherLoadingContainer}>
-              <ActivityIndicator size="large" color={palette.white} />
-              <Text style={[styles.weatherLoadingText, { color: palette.white }]}>Loading weather…</Text>
-            </View>
-          )}
-            </View>
-          </ImageBackground>
+            </LinearGradient>
           </View>
         )}
 
-        {/* Recent Activity */}
-        {(latestDiagnosis || latestSpectra) && (
-          <View style={styles.contentSection}>
-            <View style={styles.recentActivityCard}>
-              <Text style={styles.sectionHeading}>Recent Activity</Text>
-              {latestDiagnosis && (
-                <Pressable 
-                  style={styles.recentItem}
-                  onPress={() => router.push(`/history/diagnosis/${latestDiagnosis.id}`)}
-                  accessibilityLabel="View latest diagnosis"
-                >
-                  <View style={styles.recentItemIcon}>
-                    <MaterialCommunityIcons name="microscope" size={20} color={palette.brandGreen} />
-                  </View>
-                  <View style={styles.recentItemContent}>
-                    <Text style={styles.recentItemTitle}>Latest Diagnosis</Text>
-                    <Text style={styles.recentItemSubtitle} numberOfLines={1}>
-                      {latestDiagnosis.suspectedIssues[0] || 'Crop analysis'}
-                    </Text>
-                    <Text style={styles.recentItemTime}>
-                      {new Date(latestDiagnosis.timestamp).toLocaleDateString()}
-                      </Text>
-                    </View>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color={palette.gray500} />
-                </Pressable>
-              )}
-              {latestSpectra && (
-                <Pressable 
-                  style={styles.recentItem}
-                  onPress={() => router.push(`/history/spectroscopy/${latestSpectra.id}`)}
-                  accessibilityLabel="View latest spectroscopy"
-                >
-                  <View style={styles.recentItemIcon}>
-                    <MaterialCommunityIcons name="chart-timeline-variant" size={20} color={palette.brandGreen} />
-                  </View>
-                  <View style={styles.recentItemContent}>
-                    <Text style={styles.recentItemTitle}>Latest Spectrum</Text>
-                    <Text style={styles.recentItemSubtitle} numberOfLines={1}>
-                      {latestSpectra.sampleName || 'Spectral data'}
-                    </Text>
-                    <Text style={styles.recentItemTime}>
-                      {new Date(latestSpectra.timestamp).toLocaleDateString()}
-                      </Text>
-                  </View>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color={palette.gray500} />
-                </Pressable>
-              )}
-                    </View>
-                  </View>
-                )}
+        {/* AI Daily Insight Card */}
+        {(dailyInsight || isInsightLoading) && (
+          <View style={styles.insightCardContainer}>
+            <LinearGradient
+              colors={['#FFFDE7', '#FFF8E1', '#FFF3CD']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.insightCard}
+            >
+              {/* Decorative accent bar */}
+              <View style={styles.insightAccentBar} />
 
-        {/* Main Content Section */}
-        <View style={styles.contentSection}>
-          <View style={styles.overviewCard}>
-            <Text style={styles.sectionHeading}>Today's Overview</Text>
-            {statCards.length > 0 ? (
-              <View style={styles.statGrid}>
-                {statCards.map((stat) => {
-                  const handlePress = () => {
-                    if (stat.label === 'Diagnoses') {
-                      router.push('/(tabs)/history');
-                    } else if (stat.label === 'Spectra') {
-                      router.push('/(tabs)/history');
-                    } else if (stat.label === 'Chats') {
-                      router.push('/(tabs)/chat');
-                    }
-                  };
-                  
-                  return (
-                    <Pressable
-                      key={stat.label}
-                      onPress={handlePress}
-                      style={styles.statItem}
-                      accessibilityLabel={`View ${stat.label}`}
-                    >
-                      <StatTile
-                        icon={stat.icon}
-                        label={stat.label}
-                        value={stat.value}
-                        trendText={stat.trendText}
-                        trendData={stat.trendData}
-                        style={styles.statItemInner}
-                      />
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : (
-              <View style={styles.emptyStateContainer}>
-                <MaterialCommunityIcons name="chart-timeline-variant" size={48} color={palette.gray500} />
-                <Text style={styles.emptyStateTitle}>No Activity Yet</Text>
-                <Text style={styles.emptyStateText}>Start using the app to see your stats here</Text>
-                <Pressable 
-                  style={styles.emptyStateButton}
-                  onPress={() => router.push('/(tabs)/diagnosis')}
+              <View style={styles.insightHeader}>
+                <LinearGradient
+                  colors={['#FFD54F', '#FFA000']}
+                  style={styles.insightIconContainer}
                 >
-                  <MaterialCommunityIcons name="camera-iris" size={20} color={palette.white} />
-                  <Text style={styles.emptyStateButtonText}>Start Diagnosis</Text>
-                </Pressable>
+                  <MaterialCommunityIcons name="lightbulb-on" size={20} color="#FFFFFF" />
+                </LinearGradient>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.insightTitle}>AI Daily Tip</Text>
+                  <Text style={styles.insightSubtitle}>Personalized for your crops & weather</Text>
+                </View>
+                <View style={styles.insightBadge}>
+                  <MaterialCommunityIcons name="robot" size={12} color="#F57F17" />
+                  <Text style={styles.insightBadgeText}>AI</Text>
+                </View>
               </View>
-            )}
+
+              {isInsightLoading ? (
+                <View style={styles.insightLoading}>
+                  <View style={styles.insightSkeletonLine} />
+                  <View style={[styles.insightSkeletonLine, { width: '75%', marginTop: 8 }]} />
+                  <View style={[styles.insightSkeletonLine, { width: '88%', marginTop: 8 }]} />
+                </View>
+              ) : (
+                <View style={styles.insightContent}>
+                  {!!dailyInsight?.weatherSummary && (
+                    <Text style={styles.weatherSummaryText}>{dailyInsight.weatherSummary}</Text>
+                  )}
+                  <View style={styles.tipBox}>
+                    <MaterialCommunityIcons
+                      name="sprout"
+                      size={16}
+                      color="#F9A825"
+                      style={{ marginBottom: 4 }}
+                    />
+                    <Text style={styles.tipText}>{dailyInsight?.tip}</Text>
+                  </View>
+                </View>
+              )}
+            </LinearGradient>
           </View>
-        </View>
+        )}
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -1201,20 +945,165 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5FBF6',
   },
+  insightCardContainer: {
+    marginHorizontal: spacing.screen,
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
+    borderRadius: radius.xl,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#F57F17',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.18,
+        shadowRadius: 12,
+      },
+      android: { elevation: 6 },
+    }),
+  },
+  insightCard: {
+    padding: spacing.lg,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+    overflow: 'hidden',
+  },
+  insightAccentBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: '#FFA000',
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+    marginTop: spacing.xs,
+  },
+  insightIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  insightBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FFF8E1',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+  },
+  insightBadgeText: {
+    fontFamily: appFont,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#F57F17',
+    letterSpacing: 0.5,
+  },
+  insightTitle: {
+    fontFamily: appFont,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#E65100',
+    letterSpacing: -0.3,
+  },
+  insightSubtitle: {
+    fontFamily: appFont,
+    fontSize: 11,
+    color: '#A1720A',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  insightContent: {
+    gap: spacing.md,
+  },
+  weatherSummaryText: {
+    fontFamily: appFont,
+    fontSize: 14,
+    color: '#5D4037',
+    lineHeight: 21,
+    fontWeight: '500',
+    fontStyle: 'italic',
+    paddingHorizontal: 2,
+  },
+  tipBox: {
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FFA000',
+  },
+  tipText: {
+    fontFamily: appFont,
+    fontSize: 14,
+    color: '#4E342E',
+    lineHeight: 21,
+    fontWeight: '500',
+  },
+  insightLoading: {
+    paddingVertical: spacing.sm,
+  },
+  insightSkeletonLine: {
+    height: 12,
+    width: '100%',
+    backgroundColor: 'rgba(0,0,0,0.08)',
+    borderRadius: 6,
+  },
+  insightLoadingText: {
+    fontFamily: appFont,
+    fontSize: 14,
+    color: palette.text.tertiary,
+  },
   content: {
     paddingBottom: spacing.xxl * 2,
   },
-  heroSection: {
-    paddingTop: spacing.mega + spacing.lg,
-    paddingBottom: spacing.xxl + spacing.lg,
+
+  // ── Quick Actions ────────────────────────────────────────────────────────────
+  quickActionsContainer: {
+    flexDirection: 'row',
     paddingHorizontal: spacing.screen,
-    borderBottomLeftRadius: spacing.xl * 2,
-    borderBottomRightRadius: spacing.xl * 2,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
+    gap: spacing.sm,
+  },
+  quickActionBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
+    gap: 5,
+  },
+  qaGreen:  { backgroundColor: '#E8F5E9' },
+  qaBlue:   { backgroundColor: '#E3F2FD' },
+  qaAmber:  { backgroundColor: '#FBE9E7' },
+  qaPurple: { backgroundColor: '#F3E5F5' },
+  qaLabel: {
+    fontFamily: appFont,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  heroSection: {
+    paddingTop: spacing.mega + spacing.md,
+    paddingBottom: spacing.xxl + spacing.md,
+    paddingHorizontal: spacing.screen,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
     overflow: 'hidden',
   },
   heroContent: {
     alignItems: 'center',
-    gap: spacing.lg,
+    gap: spacing.md,
     justifyContent: 'center',
   },
   heroGreeting: {
@@ -1225,14 +1114,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   heroGreetingIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.xl,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
   heroGreetingText: {
     flex: 1,
@@ -1304,10 +1193,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: spacing.md,
-    paddingTop: spacing.lg,
+    marginTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingHorizontal: spacing.lg,
     gap: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.15)',
   },
   quickStatItem: {
     alignItems: 'center',
@@ -1347,26 +1238,18 @@ const styles = StyleSheet.create({
   },
   weatherCardStandalone: {
     width: '100%',
-    minHeight: 380, // Reduced from 450 for more compact design
+    minHeight: 380,
     borderRadius: spacing.lg,
     overflow: 'hidden',
     alignSelf: 'stretch',
-    ...elevation.high, // Changed from 12 to high (8)
+    ...elevation.high,
   },
-  weatherCardBackgroundImage: {
-    opacity: 0.9,
-    resizeMode: 'cover',
-    width: '100%',
-    height: '100%',
-  },
-  weatherCardOverlay: {
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  weatherCardInner: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
-    minHeight: 380, // Match card minHeight
+    minHeight: 380,
     width: '100%',
-    height: '100%', // Fill parent
-    flex: 1, // Allow flexible height
+    flex: 1,
     borderRadius: spacing.lg,
   },
   weatherLoadingContainer: {
@@ -1597,264 +1480,112 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 12,
   },
-  weatherSlideGradient: {
-    width: '100%',
-    height: '100%',
-    minHeight: 400,
+  weatherCompactCard: {
+    paddingHorizontal: spacing.screen,
+    marginBottom: spacing.lg, // Reduced margin
+  },
+  weatherCompactGradient: {
     borderRadius: radius.xl,
+    padding: spacing.lg,
+    minHeight: 200, // Much smaller than 400
   },
-  weatherSlideContent: {
-    padding: spacing.xl,
-    height: '100%',
+  weatherMainSection: {
+    marginBottom: spacing.md,
+  },
+  weatherCurrentInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 400,
+    marginBottom: spacing.md,
   },
-  weatherSlideHeader: {
+  weatherTempRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.lg,
-    paddingBottom: spacing.md,
-    borderBottomWidth: 1.5,
-    borderBottomColor: 'rgba(255, 255, 255, 0.25)',
+    gap: spacing.sm,
   },
-  weatherSlideHeaderIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.lg,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  weatherSlideTitle: {
+  weatherTempLarge: {
     fontFamily: appFont,
-    fontSize: 18,
-    fontWeight: '700',
-    color: palette.white,
-    letterSpacing: 0.5,
-    flex: 1,
-  },
-  weatherTodayMain: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.lg,
-    marginVertical: spacing.lg,
-  },
-  weatherTemperatureContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.xs,
-  },
-  weatherTemperature: {
-    fontFamily: appFont,
-    fontSize: 64,
+    fontSize: 48,
     fontWeight: '800',
     color: palette.white,
-    lineHeight: 72,
+    lineHeight: 56,
   },
-  weatherTemperatureUnit: {
+  weatherConditionLabel: {
     fontFamily: appFont,
-    fontSize: 28,
-    fontWeight: '600',
-    color: palette.white,
-    marginTop: spacing.xs,
-  },
-  weatherCondition: {
-    fontFamily: appFont,
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     color: 'rgba(255, 255, 255, 0.95)',
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-    letterSpacing: 0.3,
+    textTransform: 'capitalize',
   },
-  weatherTodayMetrics: {
+  weatherMetricsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-    justifyContent: 'center',
-    marginTop: spacing.md,
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  weatherTodayMetricCard: {
+  weatherMetricItem: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    minWidth: 70,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-    flex: 1,
-    maxWidth: '48%',
   },
-  weatherTodayMetricValue: {
-    fontFamily: appFont,
-    fontSize: 20,
-    fontWeight: '700',
-    color: palette.white,
-  },
-  weatherTodayMetricLabel: {
-    fontFamily: appFont,
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.9)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  weatherHourlyList: {
-    gap: spacing.sm,
-    flex: 1,
-  },
-  weatherHourlyItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-    marginBottom: spacing.xs,
-  },
-  weatherHourlyTime: {
-    fontFamily: appFont,
-    fontSize: 14,
-    fontWeight: '600',
-    color: palette.white,
-    minWidth: 65,
-  },
-  weatherHourlyTemp: {
-    fontFamily: appFont,
-    fontSize: 18,
-    fontWeight: '700',
-    color: palette.white,
-    minWidth: 50,
-    textAlign: 'center',
-  },
-  weatherHourlyCondition: {
-    fontFamily: appFont,
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.9)',
-    flex: 1,
-    textAlign: 'right',
-    marginLeft: spacing.md,
-  },
-  weatherTomorrowContent: {
-    alignItems: 'center',
-    gap: spacing.lg,
-    flex: 1,
-    justifyContent: 'center',
-  },
-  weatherTomorrowTemps: {
-    flexDirection: 'row',
-    gap: spacing.xl,
-    alignItems: 'center',
-    marginVertical: spacing.lg,
-  },
-  weatherTomorrowTempCard: {
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.xl,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-    minWidth: 100,
-  },
-  weatherTomorrowTempValue: {
-    fontFamily: appFont,
-    fontSize: 36,
-    fontWeight: '800',
-    color: palette.white,
-  },
-  weatherTomorrowTempLabel: {
+  weatherMetricValue: {
     fontFamily: appFont,
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.9)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  weatherFiveDayList: {
-    gap: spacing.sm,
-    flex: 1,
-  },
-  weatherFiveDayItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-    marginBottom: spacing.xs,
-  },
-  weatherFiveDayLeft: {
-    gap: spacing.xs / 2,
-    minWidth: 85,
-  },
-  weatherFiveDayName: {
-    fontFamily: appFont,
-    fontSize: 15,
-    fontWeight: '700',
-    color: palette.white,
-  },
-  weatherFiveDayDate: {
-    fontFamily: appFont,
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.85)',
-  },
-  weatherFiveDayTemps: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    alignItems: 'center',
-    minWidth: 70,
-  },
-  weatherFiveDayHigh: {
-    fontFamily: appFont,
-    fontSize: 18,
-    fontWeight: '700',
-    color: palette.white,
-  },
-  weatherFiveDayLow: {
-    fontFamily: appFont,
-    fontSize: 16,
     fontWeight: '600',
+    color: palette.white,
+  },
+  weatherMetricUnit: {
+    fontSize: 11,
+    fontWeight: '400',
     color: 'rgba(255, 255, 255, 0.8)',
   },
-  weatherPaginationContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: radius.pill,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xl,
-    marginTop: spacing.lg,
-    alignSelf: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
+  weatherDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    marginBottom: spacing.md,
   },
-  weatherPagination: {
-    flexDirection: 'row',
+  weatherForecastSection: {
+    // Container for the hourly scroll
+  },
+  weatherHourlyContainer: {
+    gap: spacing.sm,
+    paddingRight: spacing.md,
+  },
+  weatherHourlyCompactItem: {
+    alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: radius.md,
+    minWidth: 55,
+  },
+  weatherHourlyTimeCompact: {
+    fontFamily: appFont,
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginBottom: 2,
+  },
+  weatherHourlyTempCompact: {
+    fontFamily: appFont,
+    fontSize: 14,
+    fontWeight: '700',
+    color: palette.white,
+  },
+  weatherTomorrowCompact: {
     alignItems: 'center',
-  },
-  weatherPaginationDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#D2DAD4',
-  },
-  weatherPaginationDotActive: {
-    backgroundColor: palette.brandGreen,
-    width: 24,
-    height: 8,
+    justifyContent: 'center',
+    gap: spacing.xs,
+
+    paddingHorizontal: spacing.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)', // Slightly distinct background
+    borderRadius: radius.md,
+    minWidth: 55,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   weatherSection: {
     marginBottom: spacing.xxl,
@@ -1898,9 +1629,6 @@ const styles = StyleSheet.create({
     fontFamily: appFont,
     fontSize: 14,
     color: palette.gray500,
-  },
-  weatherForecastSection: {
-    gap: spacing.md,
   },
   weatherForecastGrid: {
     flexDirection: 'row',
