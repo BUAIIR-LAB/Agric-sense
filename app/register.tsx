@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Platform } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { StatusBar } from 'expo-status-bar';
 
 import {
   FarmerProfile,
@@ -69,7 +70,7 @@ export default function RegisterScreen() {
     const sanitized = sanitizePhoneNumber(text);
     const formatted = formatPhoneNumber(sanitized);
     setPhoneNumber(formatted);
-    
+
     if (sanitized.length > 0) {
       const validation = validatePhoneNumber(sanitized);
       if (!validation.isValid) {
@@ -140,7 +141,7 @@ export default function RegisterScreen() {
 
     const sanitizedPhone = sanitizePhoneNumber(phoneNumber);
     const phoneValidation = validatePhoneNumber(sanitizedPhone);
-    
+
     if (!phoneValidation.isValid) {
       setPhoneError(phoneValidation.error || 'Invalid phone number');
       showAlert('warning', 'Invalid Phone', phoneValidation.error || 'Enter a valid phone number.');
@@ -151,7 +152,7 @@ export default function RegisterScreen() {
     try {
       // For now, we'll use a default password. In production, add a password field
       const password = sanitizedPhone; // Using phone number as default password for testing
-      
+
       const success = await registerWithAPI({
         name: sanitizeText(name.trim()),
         phone_number: sanitizedPhone,
@@ -181,43 +182,78 @@ export default function RegisterScreen() {
 
   const isLoading = isSubmitting || contextLoading;
 
+  const STEPS = ['Personal', 'Preferences', 'Crops', 'Location'];
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView 
-        style={styles.screen} 
-        contentContainerStyle={styles.container} 
+    <View style={styles.root}>
+      <StatusBar style="light" />
+
+      {/* Background gradient */}
+      <LinearGradient
+        colors={['#1B5E20', '#2E7D32', '#388E3C']}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      {/* Decorative circles */}
+      <View style={styles.decorCircle1} />
+      <View style={styles.decorCircle2} />
+
+      <SafeAreaView style={styles.safeArea}>
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero Section */}
-        <LinearGradient
-          colors={[palette.brandGreen, palette.brandGreenDark]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.heroSection}
-        >
+        {/* ── Hero ── */}
+        <View style={styles.heroSection}>
           {/* Back Button */}
-          <Pressable 
+          <Pressable
             style={styles.backButton}
             onPress={() => router.replace('/')}
             accessibilityLabel="Go back to home"
           >
-            <MaterialCommunityIcons name="arrow-left" size={24} color={palette.white} />
+            <MaterialCommunityIcons name="arrow-left" size={22} color={palette.white} />
           </Pressable>
 
           <View style={styles.heroContent}>
-            <View style={styles.logoBadge}>
-              <MaterialCommunityIcons name="account-plus" size={40} color={palette.white} />
+            <View style={styles.logoRing}>
+              <View style={styles.logoCircle}>
+                <Image
+                  source={require('../assets/images/splash-icon.png')}
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                />
+              </View>
             </View>
+            <Text style={styles.appLabel}>AgriSense</Text>
             <Text style={styles.heroTitle}>Create Account</Text>
-            <Text style={styles.heroSubtitle}>
-              Join smart agriculture
-            </Text>
+            <Text style={styles.heroSub}>Set up your farmer profile in a few steps</Text>
           </View>
-        </LinearGradient>
+
+          {/* Step progress strip */}
+          <View style={styles.stepsRow}>
+            {STEPS.map((step, i) => (
+              <View key={step} style={styles.stepItem}>
+                <View style={styles.stepDot}>
+                  <Text style={styles.stepDotText}>{i + 1}</Text>
+                </View>
+                <Text style={styles.stepLabel}>{step}</Text>
+                {i < STEPS.length - 1 && <View style={styles.stepLine} />}
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* ── Content sheet (white) ── */}
+        <View style={styles.contentSheet}>
 
         {/* Personal Information */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Personal Info</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>1</Text></View>
+            <Text style={styles.sectionTitle}>Personal Info</Text>
+          </View>
           <View style={styles.card}>
             <FormRow icon="account-outline" label="Name">
               <TextInput
@@ -261,7 +297,10 @@ export default function RegisterScreen() {
 
         {/* Preferences */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Preferences</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>2</Text></View>
+            <Text style={styles.sectionTitle}>Preferences</Text>
+          </View>
           <View style={styles.card}>
             <Text style={styles.cardSectionTitle}>Language</Text>
             <View style={styles.languageGroup}>
@@ -282,7 +321,10 @@ export default function RegisterScreen() {
 
         {/* Crops */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Crops</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>3</Text></View>
+            <Text style={styles.sectionTitle}>Crops You Grow</Text>
+          </View>
           <View style={styles.card}>
             <View style={styles.chipGrid}>
               {COMMON_CROPS.map((crop) => (
@@ -294,7 +336,10 @@ export default function RegisterScreen() {
 
         {/* GPS Location */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Farm Location</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>4</Text></View>
+            <Text style={styles.sectionTitle}>Farm Location</Text>
+          </View>
           <View style={styles.card}>
             <View style={styles.locationRow}>
               <View style={styles.locationInfo}>
@@ -305,15 +350,15 @@ export default function RegisterScreen() {
                     : 'Not captured yet'}
                 </Text>
               </View>
-              <Pressable 
-                style={[styles.gpsButton, loadingLocation && styles.gpsButtonDisabled]} 
-                onPress={requestLocation} 
+              <Pressable
+                style={[styles.gpsButton, loadingLocation && styles.gpsButtonDisabled]}
+                onPress={requestLocation}
                 disabled={loadingLocation}
               >
-                <MaterialCommunityIcons 
-                  name={loadingLocation ? "loading" : "crosshairs-gps"} 
-                  size={18} 
-                  color={palette.white} 
+                <MaterialCommunityIcons
+                  name={loadingLocation ? "loading" : "crosshairs-gps"}
+                  size={18}
+                  color={palette.white}
                 />
                 <Text style={styles.gpsButtonLabel}>{loadingLocation ? 'Capturing…' : 'Use GPS'}</Text>
               </Pressable>
@@ -323,23 +368,34 @@ export default function RegisterScreen() {
 
         {/* Submit Button */}
         <View style={styles.submitSection}>
-          <Pressable 
-            style={[styles.submitButton, (!isValid || isLoading) && styles.submitDisabled]} 
+          <Pressable
+            style={[styles.submitButton, (!isValid || isLoading) && styles.submitDisabled]}
             onPress={handleSubmit}
             disabled={!isValid || isLoading}
+            accessibilityLabel="Complete registration"
           >
-            {isLoading ? (
-              <ActivityIndicator size="small" color={palette.white} />
-            ) : (
-              <>
-                <Text style={styles.submitLabel}>Complete Registration</Text>
-                <MaterialCommunityIcons name="arrow-right" size={20} color={palette.white} />
-              </>
-            )}
+            <LinearGradient
+              colors={(!isValid || isLoading) ? ['#A5D6A7', '#A5D6A7'] : ['#2E7D32', '#1B5E20']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.submitGradient}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color={palette.white} />
+              ) : (
+                <>
+                  <Text style={styles.submitLabel}>Complete Registration</Text>
+                  <MaterialCommunityIcons name="arrow-right" size={20} color="rgba(255,255,255,0.85)" />
+                </>
+              )}
+            </LinearGradient>
           </Pressable>
         </View>
+
+        </View>{/* end contentSheet */}
       </ScrollView>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
@@ -356,96 +412,205 @@ const FormRow = ({ icon, label, children }: { icon: string; label: string; child
 );
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F5FBF6',
+  root: { flex: 1, backgroundColor: '#1B5E20' },
+  safeArea: { flex: 1 },
+  screen: { flex: 1 },
+  container: { paddingBottom: spacing.xxl * 2 },
+
+  // Decorative
+  decorCircle1: {
+    position: 'absolute',
+    width: 340,
+    height: 340,
+    borderRadius: 170,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    top: -80,
+    right: -80,
   },
-  screen: {
-    flex: 1,
+  decorCircle2: {
+    position: 'absolute',
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    top: 100,
+    left: -50,
   },
-  container: {
-    paddingBottom: spacing.xxl * 2,
-  },
+
+  // ── Hero ────────────────────────────────────────────────────────────────────
   heroSection: {
-    paddingTop: spacing.xxl * 2,
-    paddingBottom: spacing.xxl * 1.5,
-    paddingHorizontal: spacing.xl,
-    borderBottomLeftRadius: spacing.xl * 2,
-    borderBottomRightRadius: spacing.xl * 2,
+    paddingTop: spacing.mega,
+    paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.xxl,
     position: 'relative',
   },
   backButton: {
     position: 'absolute',
-    top: spacing.xl,
+    top: spacing.lg,
     left: spacing.xl,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: 'rgba(255,255,255,0.22)',
   },
   heroContent: {
     alignItems: 'center',
-    gap: spacing.md,
+    gap: 6,
   },
-  logoBadge: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+  logoRing: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.25)',
+    marginBottom: 4,
+  },
+  logoCircle: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.2,
     shadowRadius: 16,
     elevation: 12,
   },
+  logoImage: { width: 62, height: 62 },
+  appLabel: {
+    fontFamily: appFont,
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.6)',
+    letterSpacing: 3,
+    textTransform: 'uppercase',
+  },
   heroTitle: {
     fontFamily: appFont,
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '800',
     color: palette.white,
     textAlign: 'center',
+    letterSpacing: -0.3,
   },
-  heroSubtitle: {
+  heroSub: {
     fontFamily: appFont,
-    fontSize: 15,
-    lineHeight: 22,
-    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.72)',
     textAlign: 'center',
-    paddingHorizontal: spacing.md,
+    lineHeight: 19,
   },
+
+  // Step progress strip
+  stepsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    paddingHorizontal: 8,
+  },
+  stepItem: {
+    alignItems: 'center',
+    gap: 4,
+    flexDirection: 'column',
+    position: 'relative',
+  },
+  stepDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDotText: {
+    fontFamily: appFont,
+    fontSize: 12,
+    fontWeight: '800',
+    color: palette.brandGreen,
+  },
+  stepLabel: {
+    fontFamily: appFont,
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.75)',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  stepLine: {
+    position: 'absolute',
+    top: 14,
+    left: 28,
+    width: 32,
+    height: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+  },
+
+  // ── Content sheet ────────────────────────────────────────────────────────────
+  contentSheet: {
+    backgroundColor: '#F5FBF6',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingBottom: spacing.xxl,
+    marginTop: 12,
+    minHeight: 100,
+    overflow: 'hidden',
+  },
+
+  // ── Sections ─────────────────────────────────────────────────────────────────
   section: {
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.xxl,
-    gap: spacing.md,
+    gap: spacing.sm,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  sectionBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: palette.brandGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionBadgeText: {
+    fontFamily: appFont,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
   sectionTitle: {
     fontFamily: appFont,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
     color: palette.charcoal,
-    marginBottom: spacing.xs,
   },
   card: {
     backgroundColor: palette.white,
-    borderRadius: spacing.xl,
+    borderRadius: 20,
     padding: spacing.xl,
     gap: spacing.lg,
     borderWidth: 1,
-    borderColor: '#E1EDE4',
+    borderColor: '#E8F0EA',
     shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
     shadowRadius: 12,
-    elevation: 12,
+    elevation: 4,
   },
   cardSectionTitle: {
     fontFamily: appFont,
@@ -584,22 +749,23 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
   submitButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: palette.brandGreen,
-    paddingVertical: spacing.xl,
-    borderRadius: spacing.lg,
+    borderRadius: 16,
+    overflow: 'hidden',
     shadowColor: '#1B5E20',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.25,
     shadowRadius: 12,
-    elevation: 12,
+    elevation: 8,
+  },
+  submitGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.lg + 2,
   },
   submitDisabled: {
-    backgroundColor: '#A5D6A7',
-    opacity: 0.7,
+    opacity: 0.65,
   },
   submitLabel: {
     fontFamily: appFont,

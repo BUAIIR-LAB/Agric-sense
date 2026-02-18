@@ -1,260 +1,365 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Image,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { StatusBar } from 'expo-status-bar';
 
 import { useAppContext } from '@/context/AppContext';
 import { palette } from '@/theme/colors';
-import { spacing } from '@/theme/spacing';
 
 const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+
+const FEATURES = [
+  { icon: 'microscope' as const,          label: 'AI Crop Scan' },
+  { icon: 'weather-partly-cloudy' as const, label: 'Weather Alerts' },
+  { icon: 'robot' as const,               label: 'Expert AI Chat' },
+];
+
+const TRUST = [
+  { icon: 'shield-check' as const, label: 'Secure' },
+  { icon: 'earth'        as const, label: 'Multilingual' },
+  { icon: 'school'       as const, label: 'Expert' },
+];
 
 export default function WelcomeScreen() {
   const router = useRouter();
   const { state, isHydrated } = useAppContext();
 
   useEffect(() => {
-    // Once app is hydrated, check if user is already authenticated
-    // If authenticated, redirect to home screen immediately
-    if (isHydrated) {
-      if (state.isAuthenticated && state.profile) {
-        console.log('✅ User is authenticated, redirecting to home...');
-        router.replace('/(tabs)/home');
-      } else {
-        console.log('ℹ️ User is not authenticated, showing welcome screen');
-      }
+    if (isHydrated && state.isAuthenticated && state.profile) {
+      router.replace('/(tabs)/home');
     }
   }, [isHydrated, state.isAuthenticated, state.profile, router]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Hero Section with Gradient */}
-        <LinearGradient
-          colors={[palette.brandGreen, palette.brandGreenDark]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.heroSection}
-        >
-          <View style={styles.heroContent}>
-            <View style={styles.logoContainer}>
-              <View style={styles.logoBadge}>
-                <MaterialCommunityIcons name="leaf" size={44} color={palette.white} />
-              </View>
-            </View>
-            <View style={styles.heroText}>
-              <Text style={styles.title}>Agri-sense</Text>
-              <Text style={styles.subtitle}>
-                AI-powered crop diagnosis
-              </Text>
+    <View style={styles.root}>
+      <StatusBar style="light" />
+
+      {/* Full-screen gradient background */}
+      <LinearGradient
+        colors={['#1B5E20', '#2E7D32', '#43A047']}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+
+      {/* Decorative depth circles */}
+      <View style={styles.decorCircleLarge} />
+      <View style={styles.decorCircleSmall} />
+
+      <SafeAreaView style={styles.safeArea}>
+        {/* ── Brand section ─────────────────────────────────────────── */}
+        <View style={styles.brandSection}>
+          {/* Logo */}
+          <View style={styles.logoRing}>
+            <View style={styles.logoCircle}>
+              <Image
+                source={require('../assets/images/splash-icon.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
+                accessibilityLabel="AgriSense logo"
+              />
             </View>
           </View>
-        </LinearGradient>
 
-        {/* CTA Section */}
-        <View style={styles.ctaSection}>
-          <View style={styles.ctaCard}>
-            <Pressable 
-              style={styles.primaryButton} 
-              onPress={() => router.push('/register')}
-              accessibilityLabel="Register as farmer"
-            >
-              <View style={styles.buttonIconContainer}>
-                <MaterialCommunityIcons name="account-plus" size={20} color={palette.white} />
+          <Text style={styles.appName}>AgriSense</Text>
+          <Text style={styles.appTagline}>Smart Farming, Better Yields</Text>
+
+          {/* Feature pills */}
+          <View style={styles.pillsRow}>
+            {FEATURES.map(f => (
+              <View key={f.label} style={styles.pill}>
+                <MaterialCommunityIcons name={f.icon} size={13} color="rgba(255,255,255,0.95)" />
+                <Text style={styles.pillText}>{f.label}</Text>
               </View>
-              <Text style={styles.primaryLabel}>Register</Text>
-              <MaterialCommunityIcons name="arrow-right" size={20} color={palette.white} />
-            </Pressable>
-            
-            <Pressable 
-              style={styles.secondaryButton} 
-              onPress={() => router.push('/login')}
-              accessibilityLabel="Sign in with phone number"
-            >
-              <MaterialCommunityIcons name="login" size={18} color={palette.brandGreen} />
-              <Text style={styles.secondaryLabel}>Sign In</Text>
-            </Pressable>
+            ))}
           </View>
         </View>
 
-        {/* Trust Indicators */}
-        <View style={styles.trustSection}>
-          <View style={styles.trustItem}>
-            <MaterialCommunityIcons name="shield-check" size={24} color={palette.brandGreen} />
-            <Text style={styles.trustText}>Secure</Text>
-          </View>
-          <View style={styles.trustItem}>
-            <MaterialCommunityIcons name="translate" size={24} color={palette.brandGreen} />
-            <Text style={styles.trustText}>Multilingual</Text>
-          </View>
-          <View style={styles.trustItem}>
-            <MaterialCommunityIcons name="school" size={24} color={palette.brandGreen} />
-            <Text style={styles.trustText}>Expert</Text>
+        {/* ── CTA bottom sheet ──────────────────────────────────────── */}
+        <View style={styles.ctaSheet}>
+          {/* Sheet drag handle */}
+          <View style={styles.sheetHandle} />
+
+          <Text style={styles.ctaHeading}>Start your farming journey</Text>
+          <Text style={styles.ctaBody}>
+            Join thousands of farmers growing smarter with AI-powered crop insights.
+          </Text>
+
+          {/* Primary — Create Account (gradient button) */}
+          <Pressable
+            style={styles.primaryButton}
+            onPress={() => router.push('/register')}
+            accessibilityLabel="Create a new account"
+          >
+            <LinearGradient
+              colors={['#2E7D32', '#1B5E20']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.primaryGradient}
+            >
+              <View style={styles.btnIconBadge}>
+                <MaterialCommunityIcons name="account-plus" size={17} color={palette.brandGreen} />
+              </View>
+              <Text style={styles.primaryLabel}>Create Account</Text>
+              <MaterialCommunityIcons name="arrow-right" size={18} color="rgba(255,255,255,0.85)" />
+            </LinearGradient>
+          </Pressable>
+
+          {/* Secondary — Sign In (text link) */}
+          <Pressable
+            style={styles.signInRow}
+            onPress={() => router.push('/login')}
+            accessibilityLabel="Sign in with existing account"
+          >
+            <Text style={styles.signInText}>Already a member? </Text>
+            <Text style={styles.signInLink}>Sign In →</Text>
+          </Pressable>
+
+          {/* Trust badges */}
+          <View style={styles.trustDivider} />
+          <View style={styles.trustRow}>
+            {TRUST.map(t => (
+              <View key={t.label} style={styles.trustItem}>
+                <MaterialCommunityIcons name={t.icon} size={17} color={palette.brandGreen} />
+                <Text style={styles.trustText}>{t.label}</Text>
+              </View>
+            ))}
           </View>
         </View>
-      </ScrollView>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: '#1B5E20',
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: '#F5FBF6',
   },
-  scrollContent: {
-    flexGrow: 1,
-    paddingBottom: spacing.xxl,
+
+  // ── Decorative circles ───────────────────────────────────────────────────────
+  decorCircleLarge: {
+    position: 'absolute',
+    width: 380,
+    height: 380,
+    borderRadius: 190,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    top: -100,
+    right: -100,
   },
-  heroSection: {
-    paddingTop: spacing.xxl * 2,
-    paddingBottom: spacing.xxl,
-    paddingHorizontal: spacing.xl,
-    borderBottomLeftRadius: spacing.xl * 2,
-    borderBottomRightRadius: spacing.xl * 2,
-    justifyContent: 'center',
+  decorCircleSmall: {
+    position: 'absolute',
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    top: 100,
+    left: -70,
   },
-  heroContent: {
+
+  // ── Brand section ────────────────────────────────────────────────────────────
+  brandSection: {
+    flex: 1,
     alignItems: 'center',
-    gap: spacing.xl,
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 24,
   },
-  logoContainer: {
-    marginBottom: spacing.md,
-  },
-  logoBadge: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+  logoRing: {
+    width: 136,
+    height: 136,
+    borderRadius: 68,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.25)',
+    marginBottom: 4,
+  },
+  logoCircle: {
+    width: 116,
+    height: 116,
+    borderRadius: 58,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 12,
+    shadowRadius: 20,
+    elevation: 16,
   },
-  heroText: {
-    alignItems: 'center',
-    gap: spacing.md,
+  logoImage: {
+    width: 86,
+    height: 86,
   },
-  title: {
+  appName: {
     fontFamily: appFont,
-    fontSize: 38,
+    fontSize: 40,
     fontWeight: '800',
-    color: palette.white,
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
     textAlign: 'center',
-    lineHeight: 44,
   },
-  subtitle: {
+  appTagline: {
     fontFamily: appFont,
-    fontSize: 16,
-    lineHeight: 22,
-    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.78)',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
     textAlign: 'center',
-    paddingHorizontal: spacing.md,
   },
-  ctaSection: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
+  pillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
   },
-  ctaCard: {
-    backgroundColor: palette.white,
-    borderRadius: spacing.xl,
-    padding: spacing.xl,
-    gap: spacing.lg,
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.14)',
     borderWidth: 1,
-    borderColor: '#E1EDE4',
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 12,
+    borderColor: 'rgba(255,255,255,0.22)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
-  ctaTitle: {
+  pillText: {
     fontFamily: appFont,
-    fontSize: 24,
-    fontWeight: '700',
-    color: palette.charcoal,
-    textAlign: 'center',
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.92)',
+    fontWeight: '600',
   },
-  ctaSubtitle: {
+
+  // ── CTA sheet ────────────────────────────────────────────────────────────────
+  ctaSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 20,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 20,
+  },
+  sheetHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#DDE5E0',
+    alignSelf: 'center',
+    marginBottom: 4,
+  },
+  ctaHeading: {
+    fontFamily: appFont,
+    fontSize: 22,
+    fontWeight: '800',
+    color: palette.charcoal,
+    letterSpacing: -0.3,
+  },
+  ctaBody: {
     fontFamily: appFont,
     fontSize: 14,
-    lineHeight: 20,
     color: palette.gray500,
-    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: -4,
   },
+
+  // Primary button
   primaryButton: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#1B5E20',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  primaryGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: palette.brandGreen,
-    borderRadius: spacing.lg,
-    paddingVertical: spacing.xl,
-    paddingHorizontal: spacing.xl,
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 12,
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
   },
-  buttonIconContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  btnIconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.92)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryLabel: {
     fontFamily: appFont,
-    color: palette.white,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
+    color: '#FFFFFF',
     flex: 1,
     textAlign: 'center',
-    letterSpacing: 0.3,
   },
-  secondaryButton: {
+
+  // Sign in link
+  signInRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
-    borderRadius: spacing.lg,
-    borderWidth: 2,
-    borderColor: palette.brandGreen,
-    backgroundColor: palette.white,
+    paddingVertical: 2,
   },
-  secondaryLabel: {
+  signInText: {
     fontFamily: appFont,
-    color: palette.brandGreen,
-    fontSize: 17,
-    fontWeight: '600',
+    fontSize: 15,
+    color: palette.gray500,
   },
-  trustSection: {
+  signInLink: {
+    fontFamily: appFont,
+    fontSize: 15,
+    fontWeight: '700',
+    color: palette.brandGreen,
+  },
+
+  // Trust badges
+  trustDivider: {
+    height: 1,
+    backgroundColor: '#EEF3EF',
+    marginVertical: -2,
+  },
+  trustRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
-    gap: spacing.md,
+    paddingTop: 2,
   },
   trustItem: {
-    flex: 1,
     alignItems: 'center',
-    gap: spacing.xs,
+    gap: 4,
   },
   trustText: {
     fontFamily: appFont,
-    fontSize: 12,
+    fontSize: 11,
+    fontWeight: '600',
     color: palette.gray500,
-    textAlign: 'center',
-    fontWeight: '500',
+    letterSpacing: 0.3,
   },
 });
