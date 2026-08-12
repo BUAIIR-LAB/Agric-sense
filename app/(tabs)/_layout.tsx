@@ -1,10 +1,9 @@
-import { Tabs, useRouter, useSegments } from 'expo-router';
+import { Tabs, useRouter, useSegments, type Href } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import {
+  ActivityIndicator,
   Animated,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -14,111 +13,165 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffect, useRef } from 'react';
 
 import { palette } from '@/theme/colors';
-
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+import { Fonts } from '@/theme/fonts';
+import { useAppContext } from '@/context/AppContext';
+import { useCart } from '@/context/CartContext';
+import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { TAB_BAR_HEIGHT } from '@/constants/layout';
 
 type Tab = {
   name: string;
   label: string;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
   activeIcon: keyof typeof MaterialCommunityIcons.glyphMap;
-  route: any;
+  route: Href;
+  match?: string[];
 };
 
-const TAB_BAR_HEIGHT = 64;
+const ALL_TABS: Tab[] = [
+  {
+    name: 'home',
+    label: 'Home',
+    icon: 'home-outline',
+    activeIcon: 'home',
+    route: '/(tabs)/home',
+  },
+  {
+    name: 'scan',
+    label: 'Scan',
+    icon: 'camera-plus-outline',
+    activeIcon: 'camera-plus',
+    route: '/(tabs)/scan?mode=symptom',
+    match: ['scan', 'diagnosis', 'spectroscopy'],
+  },
+  {
+    name: 'marketplace',
+    label: 'Market',
+    icon: 'storefront-outline',
+    activeIcon: 'storefront',
+    route: '/(tabs)/marketplace',
+  },
+  {
+    name: 'chat',
+    label: 'Chat',
+    icon: 'message-outline',
+    activeIcon: 'message',
+    route: '/(tabs)/chat',
+  },
+  {
+    name: 'history',
+    label: 'History',
+    icon: 'clock-outline',
+    activeIcon: 'clock',
+    route: '/(tabs)/history',
+  },
+];
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const segments = useSegments() as string[];
+  const { isOffline } = useAppContext();
+  const { itemCount } = useCart();
+  const onMarketplace = segments.includes('marketplace');
+  const { isReady, isAuthenticated } = useAuthGuard({ allowGuest: true });
 
-  const isChatScreen = segments.includes('chat');
   const currentRoute = segments[segments.length - 1] || 'home';
+  const hideTabBar = currentRoute === 'chat';
 
-  const tabs: Tab[] = [
-    {
-      name: 'diagnosis',
-      label: 'Diagnose',
-      icon: 'microscope',
-      activeIcon: 'microscope',
-      route: '/(tabs)/diagnosis',
-    },
-    {
-      name: 'home',
-      label: 'Home',
-      icon: 'home-outline',
-      activeIcon: 'home',
-      route: '/(tabs)/home',
-    },
-    {
-      name: 'history',
-      label: 'History',
-      icon: 'history',
-      activeIcon: 'history',
-      route: '/(tabs)/history',
-    },
-    {
-      name: 'profile',
-      label: 'Profile',
-      icon: 'account-outline',
-      activeIcon: 'account',
-      route: '/(tabs)/profile',
-    },
-  ];
-
-  // One animated scale value per tab
-  const tabScales = useRef(tabs.map(() => new Animated.Value(1))).current;
-
-  // FAB breathing pulse (scale only — native driver compatible)
-  const fabScale = useRef(new Animated.Value(1)).current;
+  const tabScales = useRef(ALL_TABS.map(() => new Animated.Value(1))).current;
 
   useEffect(() => {
-    if (isChatScreen) return;
     const pulse = Animated.loop(
       Animated.sequence([
-        Animated.timing(fabScale, {
-          toValue: 1.08,
-          duration: 1400,
-          useNativeDriver: true,
-        }),
-        Animated.timing(fabScale, {
-          toValue: 1,
-          duration: 1400,
-          useNativeDriver: true,
-        }),
+        Animated.timing(tabScales[0], { toValue: 1, duration: 1500, useNativeDriver: true }),
+        Animated.timing(tabScales[0], { toValue: 1, duration: 1500, useNativeDriver: true }),
       ])
     );
     pulse.start();
     return () => pulse.stop();
-  }, [isChatScreen]);
+  }, [tabScales]);
 
-  const isActive = (tabName: string) => currentRoute === tabName;
+  // Guests may only stay on Market; other tabs require sign-in
+  useEffect(() => {
+    if (!isReady) return;
+    if (!isAuthenticated && !onMarketplace) {
+      router.replace('/(tabs)/marketplace');
+    }
+  }, [isReady, isAuthenticated, onMarketplace, router]);
 
-  const handleTabPress = (index: number, route: any) => {
+  if (!isReady) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={palette.brandGreen} />
+      </View>
+    );
+  }
+
+  const isActive = (tab: Tab) => {
+    if (tab.match) return tab.match.includes(currentRoute);
+    return currentRoute === tab.name;
+  };
+
+  const handleTabPress = (index: number, route: Tab['route']) => {
+    const tab = ALL_TABS[index];
+    if (!isAuthenticated && tab.name !== 'marketplace') {
+      router.push('/login');
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
-      Animated.timing(tabScales[index], {
-        toValue: 0.82,
-        duration: 70,
-        useNativeDriver: true,
-      }),
-      Animated.spring(tabScales[index], {
-        toValue: 1,
-        useNativeDriver: true,
-        friction: 5,
-        tension: 320,
-      }),
+      Animated.timing(tabScales[index], { toValue: 0.8, duration: 65, useNativeDriver: true }),
+      Animated.spring(tabScales[index], { toValue: 1, useNativeDriver: true, friction: 5, tension: 340 }),
     ]).start();
     router.push(route);
   };
 
-  const handleFabPress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.push('/(tabs)/chat');
+  const renderTab = (tab: Tab, index: number) => {
+    const active = isActive(tab);
+    const showCartBadge = tab.name === 'marketplace' && itemCount > 0;
+    return (
+      <Pressable
+        key={tab.name}
+        style={styles.tabButton}
+        onPress={() => handleTabPress(index, tab.route)}
+        accessibilityLabel={tab.label}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: active }}
+        accessibilityHint={`Navigate to ${tab.label}`}
+      >
+        <Animated.View
+          style={[styles.tabInner, { transform: [{ scale: tabScales[index] }] }]}
+        >
+          <View>
+            <MaterialCommunityIcons
+              name={(active ? tab.activeIcon : tab.icon) as any}
+              size={24}
+              color={active ? palette.brandGreen : palette.ui.tabBarInactive}
+            />
+            {showCartBadge ? (
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>{itemCount > 99 ? '99+' : itemCount}</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={[styles.tabLabel, active && styles.tabLabelActive]} numberOfLines={1}>
+            {tab.label}
+          </Text>
+        </Animated.View>
+      </Pressable>
+    );
   };
 
   return (
     <View style={styles.container}>
+      {isOffline && (
+        <View style={[styles.offlineBanner, { paddingTop: insets.top }]}>
+          <MaterialCommunityIcons name="wifi-off" size={14} color={palette.white} />
+          <Text style={styles.offlineBannerText}>Offline Mode · Using cached data</Text>
+        </View>
+      )}
+
       <Tabs
         initialRouteName="home"
         screenOptions={{
@@ -128,100 +181,27 @@ export default function TabLayout() {
         }}
       >
         <Tabs.Screen name="home" />
+        <Tabs.Screen name="scan" />
+        <Tabs.Screen name="marketplace" />
         <Tabs.Screen name="chat" />
-        <Tabs.Screen name="diagnosis" />
         <Tabs.Screen name="history" />
         <Tabs.Screen name="profile" />
+        <Tabs.Screen name="diagnosis" options={{ href: null }} />
+        <Tabs.Screen name="spectroscopy" options={{ href: null }} />
       </Tabs>
 
-      {!isChatScreen && (
-        <>
-          {/* Bottom Tab Bar */}
-          <View
-            style={[
-              styles.tabBarContainer,
-              {
-                paddingBottom: Math.max(insets.bottom, 8),
-                height: TAB_BAR_HEIGHT + Math.max(insets.bottom, 8),
-              },
-            ]}
-          >
-            {/* Subtle top highlight line */}
-            <View style={styles.tabBarTopLine} />
-
-            <View style={styles.customTabBar}>
-              {tabs.map((tab, index) => {
-                const active = isActive(tab.name);
-                return (
-                  <Pressable
-                    key={tab.name}
-                    style={styles.tabButton}
-                    onPress={() => handleTabPress(index, tab.route)}
-                    accessibilityLabel={tab.label}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: active }}
-                  >
-                    <Animated.View
-                      style={[
-                        styles.tabInner,
-                        { transform: [{ scale: tabScales[index] }] },
-                      ]}
-                    >
-                      {/* Active pill background */}
-                      {active && <View style={styles.activePill} />}
-
-                      <MaterialCommunityIcons
-                        name={(active ? tab.activeIcon : tab.icon) as any}
-                        size={24}
-                        color={active ? palette.brandGreen : '#94A3B0'}
-                      />
-                      <Text
-                        style={[
-                          styles.tabLabel,
-                          active && styles.tabLabelActive,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {tab.label}
-                      </Text>
-                    </Animated.View>
-                  </Pressable>
-                );
-              })}
-            </View>
+      {!hideTabBar && (
+        <View
+          style={[
+            styles.tabBarContainer,
+            { paddingBottom: Math.max(insets.bottom, 16), height: TAB_BAR_HEIGHT + Math.max(insets.bottom, 16) },
+          ]}
+        >
+          <View style={styles.tabBarTopLine} />
+          <View style={styles.customTabBar}>
+            {ALL_TABS.map((tab, index) => renderTab(tab, index))}
           </View>
-
-          {/* Chat FAB with pulse animation */}
-          <Animated.View
-            style={[
-              styles.fabWrapper,
-              {
-                bottom: Math.max(insets.bottom, 8) + TAB_BAR_HEIGHT + 12,
-                transform: [{ scale: fabScale }],
-              },
-            ]}
-          >
-            <Pressable
-              accessibilityLabel="Open AI chat"
-              accessibilityRole="button"
-              onPress={handleFabPress}
-              style={styles.fabPressable}
-            >
-              <LinearGradient
-                colors={['#43A047', palette.brandGreen, '#1B5E20']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.fab}
-              >
-                <MaterialCommunityIcons
-                  name="robot"
-                  size={26}
-                  color={palette.white}
-                />
-              </LinearGradient>
-            </Pressable>
-          </Animated.View>
-        </>
+        </View>
       )}
     </View>
   );
@@ -231,15 +211,32 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-
-  // ── Tab Bar ─────────────────────────────────────────────────────────────────
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.surface.screen,
+  },
+  offlineBanner: {
+    backgroundColor: palette.ui.offlineBanner,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    gap: 8,
+    zIndex: 1000,
+  },
+  offlineBannerText: {
+    color: palette.white,
+    fontFamily: Fonts.semiBold,
+    fontSize: 12,
+  },
   tabBarContainer: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#FFFFFF',
-    // Stronger shadow compared to before
+    backgroundColor: palette.ui.tabBarBackground,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.08,
@@ -255,8 +252,8 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingTop: 6,
+    paddingTop: 8,
+    paddingHorizontal: 8,
   },
   tabButton: {
     flex: 1,
@@ -267,59 +264,34 @@ const styles = StyleSheet.create({
   tabInner: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 14,
-    position: 'relative',
-    gap: 3,
-  },
-  activePill: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: 14,
-    backgroundColor: '#EBF5EC',
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    gap: 2,
   },
   tabLabel: {
-    fontFamily: appFont,
-    fontSize: 10,
-    fontWeight: '500',
-    color: '#94A3B0',
-    letterSpacing: 0.2,
+    fontFamily: Fonts.medium,
+    fontSize: 11,
+    color: palette.ui.tabBarInactive,
   },
   tabLabelActive: {
+    fontFamily: Fonts.bold,
     color: palette.brandGreen,
-    fontWeight: '700',
   },
-
-  // ── FAB ─────────────────────────────────────────────────────────────────────
-  fabWrapper: {
+  tabBadge: {
     position: 'absolute',
-    right: 18,
-    width: 58,
-    height: 58,
-    // Shadow rendered on the wrapper so the Animated scale works on it
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
-    elevation: 14,
-    zIndex: 99,
-    borderRadius: 29,
-  },
-  fabPressable: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    overflow: 'hidden',
-  },
-  fab: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    top: -4,
+    right: -10,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: '#CC0C39',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  tabBadgeText: {
+    fontFamily: Fonts.bold,
+    fontSize: 9,
+    color: palette.white,
   },
 });

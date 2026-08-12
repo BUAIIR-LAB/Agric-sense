@@ -1,27 +1,33 @@
 # Building Android APK
 
 ## Prerequisites
-- EAS CLI installed ✅
+- EAS CLI installed (`npm install -g eas-cli` or use `npx eas-cli`)
 - Expo account (free account works)
 
 ## Steps to Build APK
 
-### 1. Login to Expo
+### 1. Login to Expo (if needed)
 ```bash
-eas login
+npx eas-cli login
 ```
-You'll be prompted to create an account or login if you don't have one.
-
-### 2. Build APK (Preview/Development)
-For a test APK that you can install directly:
+You'll be prompted to create an account or sign in. Check with:
 ```bash
-eas build --platform android --profile preview
+npx eas-cli whoami
 ```
 
-### 3. Build Production APK
-For a production-ready APK:
+### 2. Build Production APK (for distribution)
+From the project root (`AgriculturalDiagnosis`):
 ```bash
-eas build --platform android --profile production
+cd AgriculturalDiagnosis
+npx eas-cli build --platform android --profile production
+```
+- **First time:** When asked about Android credentials, choose **Generate new keystore** (Expo will create and store it for you).
+- Build runs on Expo's servers; you get a download link when it finishes.
+
+### 3. Build Preview APK (for testing)
+For a test APK you can install directly:
+```bash
+npx eas-cli build --platform android --profile preview
 ```
 
 ## Build Options

@@ -3,9 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { palette } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { Platform } from 'react-native';
-
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+import { appFont } from '@/theme/fonts';
 
 interface Props {
   children: ReactNode;

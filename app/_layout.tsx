@@ -3,22 +3,31 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
-import { View, StyleSheet, Animated, Text, Platform, Image, Dimensions } from 'react-native';
+import { View, StyleSheet, Animated, Text, Image, Dimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import 'react-native-reanimated';
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from '@expo-google-fonts/inter';
 
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AppProvider } from '@/context/AppContext';
+import { CartProvider } from '@/context/CartContext';
+import { OrdersProvider } from '@/context/OrdersContext';
 import { AlertProvider } from '@/components/AlertProvider';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { NetworkStatusBar } from '@/components/NetworkStatusBar';
 import { palette } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { initImageCache, manageCacheSize, clearOldCache } from '@/utils/imageCache';
+import { Fonts } from '@/theme/fonts';
 import { registerForPushNotificationsAsync } from '@/utils/notifications';
 
-// Keep the splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
 
 export const unstable_settings = {
@@ -60,98 +69,68 @@ export default function RootLayout() {
   const [textTranslateAnim] = useState(new Animated.Value(20));
   const [progressAnim] = useState(new Animated.Value(0));
 
+  const [fontsLoaded] = useFonts({
+    Inter: Inter_400Regular,
+    'Inter-Medium': Inter_500Medium,
+    'Inter-SemiBold': Inter_600SemiBold,
+    'Inter-Bold': Inter_700Bold,
+    'Inter-ExtraBold': Inter_800ExtraBold,
+  });
+
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
     let isMounted = true;
 
     async function prepare() {
       try {
-        // Simulate loading time for splash screen
         timeoutId = setTimeout(() => {
           if (isMounted) {
             setAppIsReady(true);
-            // Animate splash screen out
             Animated.parallel([
-              Animated.timing(scaleAnim, {
-                toValue: 1.15,
-                duration: 350,
-                useNativeDriver: true,
-              }),
-              Animated.timing(opacityAnim, {
-                toValue: 0,
-                duration: 350,
-                useNativeDriver: true,
-              }),
-              Animated.timing(textOpacityAnim, {
-                toValue: 0,
-                duration: 250,
-                useNativeDriver: true,
-              }),
+              Animated.timing(scaleAnim, { toValue: 1.15, duration: 350, useNativeDriver: true }),
+              Animated.timing(opacityAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
+              Animated.timing(textOpacityAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
             ]).start(() => {
-              SplashScreen.hideAsync();
+              if (fontsLoaded) SplashScreen.hideAsync();
             });
           }
         }, 2000);
       } catch (e) {
-        if (__DEV__) {
-          console.warn(e);
-        }
-        if (isMounted) {
-          setAppIsReady(true);
-        }
+        if (__DEV__) console.warn(e);
+        if (isMounted) setAppIsReady(true);
       }
     }
 
-    // Start splash animation — staggered entrance
     Animated.sequence([
-      // 1. Logo springs in
       Animated.parallel([
-        Animated.spring(scaleAnim, {
-          toValue: 1,
-          tension: 50,
-          friction: 7,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacityAnim, {
-          toValue: 1,
-          duration: 450,
-          useNativeDriver: true,
-        }),
+        Animated.spring(scaleAnim, { toValue: 1, tension: 50, friction: 7, useNativeDriver: true }),
+        Animated.timing(opacityAnim, { toValue: 1, duration: 450, useNativeDriver: true }),
       ]),
-      // 2. Brand text slides up
       Animated.parallel([
-        Animated.timing(textOpacityAnim, {
-          toValue: 1,
-          duration: 380,
-          useNativeDriver: true,
-        }),
-        Animated.timing(textTranslateAnim, {
-          toValue: 0,
-          duration: 380,
-          useNativeDriver: true,
-        }),
+        Animated.timing(textOpacityAnim, { toValue: 1, duration: 380, useNativeDriver: true }),
+        Animated.timing(textTranslateAnim, { toValue: 0, duration: 380, useNativeDriver: true }),
       ]),
     ]).start();
 
-    // 3. Progress bar fills independently (JS driver — width interpolation)
-    Animated.timing(progressAnim, {
-      toValue: 1,
-      duration: 1800,
-      useNativeDriver: false,
-    }).start();
+    Animated.timing(progressAnim, { toValue: 1, duration: 1800, useNativeDriver: false }).start();
 
     prepare();
     registerForPushNotificationsAsync();
 
     return () => {
       isMounted = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      if (timeoutId) clearTimeout(timeoutId);
     };
-  }, []);
+  }, [fontsLoaded]);
 
-  if (!appIsReady) {
+  // Hide splash once both app is ready AND fonts are loaded
+  useEffect(() => {
+    if (appIsReady && fontsLoaded) {
+      SplashScreen.hideAsync();
+    }
+  }, [appIsReady, fontsLoaded]);
+
+  if (!appIsReady || !fontsLoaded) {
     return (
       <LinearGradient
         colors={['#1B5E20', '#2E7D32', '#388E3C']}
@@ -159,17 +138,10 @@ export default function RootLayout() {
         end={{ x: 0.9, y: 1 }}
         style={styles.splashContainer}
       >
-        {/* Decorative background circles */}
         <View style={styles.splashCircleLarge} />
         <View style={styles.splashCircleSmall} />
 
-        {/* Logo — springs in */}
-        <Animated.View
-          style={[
-            styles.splashLogoWrapper,
-            { transform: [{ scale: scaleAnim }], opacity: opacityAnim },
-          ]}
-        >
+        <Animated.View style={[styles.splashLogoWrapper, { transform: [{ scale: scaleAnim }], opacity: opacityAnim }]}>
           <View style={styles.splashLogoCircle}>
             <Image
               source={require('../assets/images/splash-icon.png')}
@@ -180,32 +152,16 @@ export default function RootLayout() {
           </View>
         </Animated.View>
 
-        {/* Brand text — slides up */}
-        <Animated.View
-          style={[
-            styles.splashBrandWrapper,
-            {
-              opacity: textOpacityAnim,
-              transform: [{ translateY: textTranslateAnim }],
-            },
-          ]}
-        >
+        <Animated.View style={[styles.splashBrandWrapper, { opacity: textOpacityAnim, transform: [{ translateY: textTranslateAnim }] }]}>
           <Text style={styles.splashText}>AgriSense</Text>
           <Text style={styles.splashTagline}>Smart Farming, Better Yields</Text>
         </Animated.View>
 
-        {/* Progress bar */}
         <View style={styles.splashProgressTrack}>
           <Animated.View
-            style={[
-              styles.splashProgressFill,
-              {
-                width: progressAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ['0%', '100%'],
-                }),
-              },
-            ]}
+            style={[styles.splashProgressFill, {
+              width: progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+            }]}
           />
         </View>
       </LinearGradient>
@@ -213,39 +169,51 @@ export default function RootLayout() {
   }
 
   return (
-    <ErrorBoundary>
-      <AppProvider>
-        <AlertProvider>
-          <NetworkStatusBar />
-          <ThemeProvider value={colorScheme === 'dark' ? darkTheme : lightTheme}>
-            <Stack screenOptions={{ headerShadowVisible: false, headerShown: false }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="register" />
-              <Stack.Screen name="login" />
-              <Stack.Screen name="profile" />
-              <Stack.Screen name="(tabs)" />
-            </Stack>
-            <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
-          </ThemeProvider>
-        </AlertProvider>
-      </AppProvider>
-    </ErrorBoundary>
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <AppProvider>
+          <CartProvider>
+            <OrdersProvider>
+              <AlertProvider>
+                <NetworkStatusBar />
+                <ThemeProvider value={colorScheme === 'dark' ? darkTheme : lightTheme}>
+                  <Stack screenOptions={{ headerShadowVisible: false, headerShown: false }}>
+                    <Stack.Screen name="index" />
+                    <Stack.Screen name="register" />
+                    <Stack.Screen name="login" />
+                    <Stack.Screen name="profile" />
+                    <Stack.Screen name="(tabs)" />
+                    <Stack.Screen name="library" />
+                    <Stack.Screen name="history/timeline" />
+                    <Stack.Screen name="history/[type]/[id]" />
+                    <Stack.Screen name="tools/soil-ph" />
+                    <Stack.Screen name="tools/yield" />
+                    <Stack.Screen name="tools/weather" />
+                    <Stack.Screen name="cart" />
+                    <Stack.Screen name="checkout" />
+                    <Stack.Screen name="orders/index" />
+                    <Stack.Screen name="orders/[id]" />
+                  </Stack>
+                  <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+                </ThemeProvider>
+              </AlertProvider>
+            </OrdersProvider>
+          </CartProvider>
+        </AppProvider>
+      </ErrorBoundary>
+    </SafeAreaProvider>
   );
 }
 
 const { width: screenWidth } = Dimensions.get('window');
-const SPLASH_FONT = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
 
 const styles = StyleSheet.create({
-  // ── Splash ──────────────────────────────────────────────────────────────────
   splashContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.xl,
   },
-
-  // Decorative circles behind the logo
   splashCircleLarge: {
     position: 'absolute',
     width: 420,
@@ -264,8 +232,6 @@ const styles = StyleSheet.create({
     bottom: -50,
     left: -80,
   },
-
-  // Logo
   splashLogoWrapper: {
     alignItems: 'center',
   },
@@ -288,14 +254,11 @@ const styles = StyleSheet.create({
     width: 110,
     height: 110,
   },
-
-  // Brand text
   splashBrandWrapper: {
     alignItems: 'center',
     gap: 6,
   },
   splashText: {
-    fontFamily: SPLASH_FONT,
     fontSize: 38,
     fontWeight: '800',
     color: '#FFFFFF',
@@ -303,7 +266,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   splashTagline: {
-    fontFamily: SPLASH_FONT,
     fontSize: 13,
     fontWeight: '500',
     color: 'rgba(255,255,255,0.75)',
@@ -311,8 +273,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
   },
-
-  // Progress bar
   splashProgressTrack: {
     position: 'absolute',
     bottom: 52,

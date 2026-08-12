@@ -1,21 +1,54 @@
 {
   "cli": {
-    "version": ">= 13.2.0"
+    "version": ">= 13.2.0",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://147.93.116.6:8090",
+        "EXPO_PUBLIC_CHAT_API_URL": "https://wanly-subtemperate-kaylene.ngrok-free.dev"
+      }
     },
     "preview": {
+      "ios": {
+        "simulator": true
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://147.93.116.6:8090",
+        "EXPO_PUBLIC_CHAT_API_URL": "https://wanly-subtemperate-kaylene.ngrok-free.dev"
+      }
+    },
+    "production": {
+      "ios": {
+        "distribution": "store"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://147.93.116.6:8090",
+        "EXPO_PUBLIC_CHAT_API_URL": "https://wanly-subtemperate-kaylene.ngrok-free.dev"
+      }
+    },
+    "apk": {
       "android": {
         "buildType": "apk"
       },
-      "distribution": "internal"
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://147.93.116.6:8090",
+        "EXPO_PUBLIC_CHAT_API_URL": "https://wanly-subtemperate-kaylene.ngrok-free.dev"
+      }
     },
-    "production": {
-      "android": {
-        "buildType": "apk"
+    "simulator": {
+      "ios": {
+        "simulator": true
       }
     }
   },
@@ -23,4 +56,3 @@
     "production": {}
   }
 }
-

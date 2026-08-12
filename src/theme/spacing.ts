@@ -1,3 +1,5 @@
+import { getSpacingMultiplier, getScreenPadding } from '@/utils/responsive';
+
 export const spacing = {
   xs: 4,    // Tight spacing (icons, badges)
   sm: 8,    // Small gaps (list items)
@@ -21,3 +23,25 @@ export const radius = {
   xl: 24,
   pill: 999,
 } as const;
+
+/**
+ * Get responsive spacing values based on device size
+ * Multiplies base spacing by device-specific factor
+ */
+export const getResponsiveSpacing = () => {
+  const multiplier = getSpacingMultiplier();
+
+  return {
+    xs: Math.round(spacing.xs * multiplier),
+    sm: Math.round(spacing.sm * multiplier),
+    md: Math.round(spacing.md * multiplier),
+    lg: Math.round(spacing.lg * multiplier),
+    xl: Math.round(spacing.xl * multiplier),
+    xxl: Math.round(spacing.xxl * multiplier),
+    mega: Math.round(spacing.mega * multiplier),
+    giga: Math.round(spacing.giga * multiplier),
+    section: Math.round(spacing.section * multiplier),
+    card: Math.round(spacing.card * multiplier),
+    screen: getScreenPadding(),
+  };
+};

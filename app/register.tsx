@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Platform } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,7 +7,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 
 import {
-  FarmerProfile,
   SUPPORTED_LANGUAGES,
   useAppContext,
   type Coordinates,
@@ -19,8 +17,9 @@ import { palette } from '@/theme/colors';
 import { spacing, radius } from '@/theme/spacing';
 import { formatPhoneNumber, validatePhoneNumber, sanitizePhoneNumber } from '@/utils/phoneNumber';
 import { sanitizeText, sanitizeString } from '@/utils/sanitize';
-
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+import { validatePassword } from '@/utils/password';
+import apiService from '@/services/api';
+import { Fonts } from '@/theme/fonts';
 
 const CropChip = ({ label, selected, onToggle }: { label: string; selected: boolean; onToggle: () => void }) => (
   <Pressable style={[styles.chip, selected && styles.chipSelected]} onPress={onToggle}>
@@ -44,6 +43,10 @@ export default function RegisterScreen() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [areaError, setAreaError] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     if (state.profile) {
@@ -121,15 +124,19 @@ export default function RegisterScreen() {
   const isValid = useMemo(() => {
     const sanitizedPhone = sanitizePhoneNumber(phoneNumber);
     const phoneValidation = validatePhoneNumber(sanitizedPhone);
+    const passwordValidation = validatePassword(password);
     return (
       name.trim().length >= 2 &&
       phoneValidation.isValid &&
       area.trim().length >= 2 &&
+      passwordValidation.isValid &&
+      password === confirmPassword &&
       !nameError &&
       !phoneError &&
-      !areaError
+      !areaError &&
+      !passwordError
     );
-  }, [name, phoneNumber, area, nameError, phoneError, areaError]);
+  }, [name, phoneNumber, area, password, confirmPassword, nameError, phoneError, areaError, passwordError]);
 
   const { registerWithAPI, isLoading: contextLoading } = useAppContext();
 
@@ -148,33 +155,52 @@ export default function RegisterScreen() {
       return;
     }
 
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      setPasswordError(passwordValidation.error || 'Invalid password');
+      showAlert('warning', 'Invalid Password', passwordValidation.error || 'Choose a stronger password.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setPasswordError('Passwords do not match');
+      showAlert('warning', 'Password Mismatch', 'Password and confirmation must match.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      // For now, we'll use a default password. In production, add a password field
-      const password = sanitizedPhone; // Using phone number as default password for testing
-
-      const success = await registerWithAPI({
+      const loggedIn = await registerWithAPI({
         name: sanitizeText(name.trim()),
         phone_number: sanitizedPhone,
-        password: password,
+        password,
         area: sanitizeText(area.trim()),
         preferred_language: language,
         crops_grown: crops,
         gps_location: gpsLocation,
       });
 
-      if (success) {
-        // Show success message and navigate to login
-        showAlert('success', 'Registration Successful', 'Account created. Please log in.', {
-          onConfirm: () => {
-            router.replace('/login');
-          },
-        });
+      if (loggedIn) {
+        router.replace('/(tabs)/home');
       } else {
-        showAlert('error', 'Registration Failed', 'Unable to create account. Try again.');
+        showAlert(
+          'info',
+          'Account Created',
+          'Your account was created. Please sign in with your phone number and password.',
+          { onConfirm: () => router.replace('/login') },
+        );
       }
     } catch (error: any) {
-      showAlert('error', 'Registration Error', error.message || 'Try again.');
+      const errorDetail = apiService.extractErrorMessage(error);
+      
+      // Handle "already registered" gracefully
+      if (error.response?.status === 400 && errorDetail.toLowerCase().includes('already registered')) {
+        showAlert('warning', 'Already Registered', 'This phone number is already registered. Please log in instead.', {
+          onConfirm: () => router.replace('/login')
+        });
+      } else {
+        showAlert('error', 'Registration Error', errorDetail);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -182,478 +208,277 @@ export default function RegisterScreen() {
 
   const isLoading = isSubmitting || contextLoading;
 
-  const STEPS = ['Personal', 'Preferences', 'Crops', 'Location'];
-
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
 
-      {/* Background gradient */}
-      <LinearGradient
-        colors={['#1B5E20', '#2E7D32', '#388E3C']}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
-      {/* Decorative circles */}
-      <View style={styles.decorCircle1} />
-      <View style={styles.decorCircle2} />
-
       <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        style={styles.screen}
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ── Hero ── */}
-        <View style={styles.heroSection}>
-          {/* Back Button */}
-          <Pressable
-            style={styles.backButton}
-            onPress={() => router.replace('/')}
-            accessibilityLabel="Go back to home"
-          >
-            <MaterialCommunityIcons name="arrow-left" size={22} color={palette.white} />
-          </Pressable>
-
-          <View style={styles.heroContent}>
-            <View style={styles.logoRing}>
-              <View style={styles.logoCircle}>
-                <Image
-                  source={require('../assets/images/splash-icon.png')}
-                  style={styles.logoImage}
-                  resizeMode="contain"
-                />
-              </View>
-            </View>
-            <Text style={styles.appLabel}>AgriSense</Text>
-            <Text style={styles.heroTitle}>Create Account</Text>
-            <Text style={styles.heroSub}>Set up your farmer profile in a few steps</Text>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.container}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <Pressable
+              style={styles.backButton}
+              onPress={() => router.replace('/')}
+              accessibilityLabel="Go back to home"
+            >
+              <MaterialCommunityIcons name="arrow-left" size={24} color={palette.white} />
+            </Pressable>
+            <Text style={styles.headerTitle}>Create Account</Text>
           </View>
 
-          {/* Step progress strip */}
-          <View style={styles.stepsRow}>
-            {STEPS.map((step, i) => (
-              <View key={step} style={styles.stepItem}>
-                <View style={styles.stepDot}>
-                  <Text style={styles.stepDotText}>{i + 1}</Text>
-                </View>
-                <Text style={styles.stepLabel}>{step}</Text>
-                {i < STEPS.length - 1 && <View style={styles.stepLine} />}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* ── Content sheet (white) ── */}
-        <View style={styles.contentSheet}>
-
-        {/* Personal Information */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>1</Text></View>
-            <Text style={styles.sectionTitle}>Personal Info</Text>
-          </View>
-          <View style={styles.card}>
-            <FormRow icon="account-outline" label="Name">
+          {/* Form */}
+          <View style={styles.form}>
+            {/* Name */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Name</Text>
               <TextInput
                 value={name}
                 onChangeText={handleNameChange}
-                placeholder="Name"
-                placeholderTextColor={palette.gray500}
+                placeholder="Enter your name"
+                placeholderTextColor={palette.gray400}
                 style={[styles.input, nameError && styles.inputError]}
                 accessibilityLabel="Full name input"
               />
               {nameError && <Text style={styles.errorText}>{nameError}</Text>}
-            </FormRow>
+            </View>
 
-            <FormRow icon="phone-outline" label="Phone">
+            {/* Phone */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Phone Number</Text>
               <TextInput
                 value={phoneNumber}
                 onChangeText={handlePhoneChange}
                 placeholder="0701 234 567"
-                placeholderTextColor={palette.gray500}
+                placeholderTextColor={palette.gray400}
                 keyboardType="phone-pad"
                 style={[styles.input, phoneError && styles.inputError]}
                 maxLength={13}
                 accessibilityLabel="Phone number input"
               />
               {phoneError && <Text style={styles.errorText}>{phoneError}</Text>}
-            </FormRow>
+            </View>
 
-            <FormRow icon="map-marker-outline" label="Location">
+            {/* Password */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordRow}>
+                <TextInput
+                  value={password}
+                  onChangeText={(text) => {
+                    setPassword(text);
+                    const v = validatePassword(text);
+                    setPasswordError(v.isValid ? null : v.error || null);
+                  }}
+                  placeholder="At least 8 characters"
+                  placeholderTextColor={palette.gray400}
+                  secureTextEntry={!showPassword}
+                  style={[styles.input, styles.passwordInput, passwordError && styles.inputError]}
+                  accessibilityLabel="Password input"
+                />
+                <Pressable
+                  style={styles.passwordToggle}
+                  onPress={() => setShowPassword((prev) => !prev)}
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  <MaterialCommunityIcons
+                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                    size={20}
+                    color={palette.gray400}
+                  />
+                </Pressable>
+              </View>
+              {passwordError && <Text style={styles.errorText}>{passwordError}</Text>}
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <TextInput
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                placeholder="Re-enter your password"
+                placeholderTextColor={palette.gray400}
+                secureTextEntry={!showPassword}
+                style={[
+                  styles.input,
+                  confirmPassword.length > 0 && password !== confirmPassword && styles.inputError,
+                ]}
+                accessibilityLabel="Confirm password input"
+              />
+            </View>
+
+            {/* Location */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Location</Text>
               <TextInput
                 value={area}
                 onChangeText={handleAreaChange}
-                placeholder="Location"
-                placeholderTextColor={palette.gray500}
+                placeholder="Enter your area/district"
+                placeholderTextColor={palette.gray400}
                 style={[styles.input, areaError && styles.inputError]}
                 accessibilityLabel="Area or district input"
               />
               {areaError && <Text style={styles.errorText}>{areaError}</Text>}
-            </FormRow>
-          </View>
-        </View>
-
-        {/* Preferences */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>2</Text></View>
-            <Text style={styles.sectionTitle}>Preferences</Text>
-          </View>
-          <View style={styles.card}>
-            <Text style={styles.cardSectionTitle}>Language</Text>
-            <View style={styles.languageGroup}>
-              {SUPPORTED_LANGUAGES.map((option) => (
-                <Pressable
-                  key={option}
-                  style={[styles.languageOption, language === option && styles.languageSelected]}
-                  onPress={() => setLanguage(option)}
-                >
-                  <Text style={[styles.languageLabel, language === option && styles.languageLabelSelected]}>
-                    {option}
-                  </Text>
-                </Pressable>
-              ))}
             </View>
-          </View>
-        </View>
 
-        {/* Crops */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>3</Text></View>
-            <Text style={styles.sectionTitle}>Crops You Grow</Text>
-          </View>
-          <View style={styles.card}>
-            <View style={styles.chipGrid}>
-              {COMMON_CROPS.map((crop) => (
-                <CropChip key={crop} label={crop} selected={crops.includes(crop)} onToggle={() => toggleCrop(crop)} />
-              ))}
-            </View>
-          </View>
-        </View>
-
-        {/* GPS Location */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>4</Text></View>
-            <Text style={styles.sectionTitle}>Farm Location</Text>
-          </View>
-          <View style={styles.card}>
-            <View style={styles.locationRow}>
-              <View style={styles.locationInfo}>
-                <MaterialCommunityIcons name="map-marker" size={20} color={palette.brandGreen} />
-                <Text style={styles.locationValue}>
-                  {gpsLocation
-                    ? `${gpsLocation.latitude.toFixed(4)}, ${gpsLocation.longitude.toFixed(4)}`
-                    : 'Not captured yet'}
-                </Text>
+            {/* Language */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Language</Text>
+              <View style={styles.languageGrid}>
+                {SUPPORTED_LANGUAGES.map((option) => (
+                  <Pressable
+                    key={option}
+                    style={[styles.languageOption, language === option && styles.languageSelected]}
+                    onPress={() => setLanguage(option)}
+                  >
+                    <Text style={[styles.languageLabel, language === option && styles.languageLabelSelected]}>
+                      {option}
+                    </Text>
+                  </Pressable>
+                ))}
               </View>
-              <Pressable
-                style={[styles.gpsButton, loadingLocation && styles.gpsButtonDisabled]}
-                onPress={requestLocation}
-                disabled={loadingLocation}
-              >
-                <MaterialCommunityIcons
-                  name={loadingLocation ? "loading" : "crosshairs-gps"}
-                  size={18}
-                  color={palette.white}
-                />
-                <Text style={styles.gpsButtonLabel}>{loadingLocation ? 'Capturing…' : 'Use GPS'}</Text>
-              </Pressable>
             </View>
-          </View>
-        </View>
 
-        {/* Submit Button */}
-        <View style={styles.submitSection}>
-          <Pressable
-            style={[styles.submitButton, (!isValid || isLoading) && styles.submitDisabled]}
-            onPress={handleSubmit}
-            disabled={!isValid || isLoading}
-            accessibilityLabel="Complete registration"
-          >
-            <LinearGradient
-              colors={(!isValid || isLoading) ? ['#A5D6A7', '#A5D6A7'] : ['#2E7D32', '#1B5E20']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.submitGradient}
+            {/* Crops */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Crops You Grow</Text>
+              <View style={styles.chipGrid}>
+                {COMMON_CROPS.map((crop) => (
+                  <CropChip key={crop} label={crop} selected={crops.includes(crop)} onToggle={() => toggleCrop(crop)} />
+                ))}
+              </View>
+            </View>
+
+            {/* GPS Location */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Farm Location</Text>
+              <View style={styles.locationRow}>
+                <View style={styles.locationInfo}>
+                  <MaterialCommunityIcons name="map-marker" size={20} color={palette.brandGreen} />
+                  <Text style={styles.locationValue}>
+                    {gpsLocation
+                      ? `${gpsLocation.latitude.toFixed(4)}, ${gpsLocation.longitude.toFixed(4)}`
+                      : 'Not captured yet'}
+                  </Text>
+                </View>
+                <Pressable
+                  style={[styles.gpsButton, loadingLocation && styles.gpsButtonDisabled]}
+                  onPress={requestLocation}
+                  disabled={loadingLocation}
+                >
+                  <MaterialCommunityIcons
+                    name={loadingLocation ? "loading" : "crosshairs-gps"}
+                    size={18}
+                    color={palette.white}
+                  />
+                  <Text style={styles.gpsButtonLabel}>{loadingLocation ? 'Capturing…' : 'Use GPS'}</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Submit Button */}
+            <Pressable
+              style={[styles.submitButton, (!isValid || isLoading) && styles.submitDisabled]}
+              onPress={handleSubmit}
+              disabled={!isValid || isLoading}
+              accessibilityLabel="Complete registration"
             >
               {isLoading ? (
                 <ActivityIndicator size="small" color={palette.white} />
               ) : (
-                <>
-                  <Text style={styles.submitLabel}>Complete Registration</Text>
-                  <MaterialCommunityIcons name="arrow-right" size={20} color="rgba(255,255,255,0.85)" />
-                </>
+                <Text style={styles.submitLabel}>Complete Registration</Text>
               )}
-            </LinearGradient>
-          </Pressable>
-        </View>
-
-        </View>{/* end contentSheet */}
-      </ScrollView>
+            </Pressable>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
 }
 
-const FormRow = ({ icon, label, children }: { icon: string; label: string; children: ReactNode }) => (
-  <View style={styles.formRow}>
-    <View style={styles.formRowHeader}>
-      <View style={styles.formIcon}>
-        <MaterialCommunityIcons name={icon as any} size={18} color={palette.white} />
-      </View>
-      <Text style={styles.formLabel}>{label}</Text>
-    </View>
-    {children}
-  </View>
-);
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#1B5E20' },
+  root: { flex: 1, backgroundColor: palette.brandGreen },
   safeArea: { flex: 1 },
-  screen: { flex: 1 },
+  scroll: { flex: 1 },
   container: { paddingBottom: spacing.xxl * 2 },
 
-  // Decorative
-  decorCircle1: {
-    position: 'absolute',
-    width: 340,
-    height: 340,
-    borderRadius: 170,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    top: -80,
-    right: -80,
-  },
-  decorCircle2: {
-    position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    top: 100,
-    left: -50,
-  },
-
-  // ── Hero ────────────────────────────────────────────────────────────────────
-  heroSection: {
-    paddingTop: spacing.mega,
+  // Header
+  header: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
     paddingBottom: spacing.xl,
-    paddingHorizontal: spacing.xxl,
-    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   backButton: {
-    position: 'absolute',
-    top: spacing.lg,
-    left: spacing.xl,
     width: 40,
     height: 40,
     borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
   },
-  heroContent: {
-    alignItems: 'center',
-    gap: 6,
-  },
-  logoRing: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.25)',
-    marginBottom: 4,
-  },
-  logoCircle: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 12,
-  },
-  logoImage: { width: 62, height: 62 },
-  appLabel: {
-    fontFamily: appFont,
-    fontSize: 11,
+  headerTitle: {
+    fontFamily: Fonts.bold,
+    fontSize: 24,
     fontWeight: '700',
-    color: 'rgba(255,255,255,0.6)',
-    letterSpacing: 3,
-    textTransform: 'uppercase',
-  },
-  heroTitle: {
-    fontFamily: appFont,
-    fontSize: 28,
-    fontWeight: '800',
     color: palette.white,
-    textAlign: 'center',
-    letterSpacing: -0.3,
-  },
-  heroSub: {
-    fontFamily: appFont,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.72)',
-    textAlign: 'center',
-    lineHeight: 19,
   },
 
-  // Step progress strip
-  stepsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 16,
-    paddingHorizontal: 8,
-  },
-  stepItem: {
-    alignItems: 'center',
-    gap: 4,
-    flexDirection: 'column',
-    position: 'relative',
-  },
-  stepDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepDotText: {
-    fontFamily: appFont,
-    fontSize: 12,
-    fontWeight: '800',
-    color: palette.brandGreen,
-  },
-  stepLabel: {
-    fontFamily: appFont,
-    fontSize: 9,
-    color: 'rgba(255,255,255,0.75)',
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  stepLine: {
-    position: 'absolute',
-    top: 14,
-    left: 28,
-    width: 32,
-    height: 1.5,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-  },
-
-  // ── Content sheet ────────────────────────────────────────────────────────────
-  contentSheet: {
-    backgroundColor: '#F5FBF6',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingBottom: spacing.xxl,
-    marginTop: 12,
-    minHeight: 100,
-    overflow: 'hidden',
-  },
-
-  // ── Sections ─────────────────────────────────────────────────────────────────
-  section: {
+  // Form
+  form: {
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
-    gap: spacing.sm,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  sectionBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: palette.brandGreen,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sectionBadgeText: {
-    fontFamily: appFont,
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  sectionTitle: {
-    fontFamily: appFont,
-    fontSize: 17,
-    fontWeight: '700',
-    color: palette.charcoal,
-  },
-  card: {
-    backgroundColor: palette.white,
-    borderRadius: 20,
-    padding: spacing.xl,
     gap: spacing.lg,
-    borderWidth: 1,
-    borderColor: '#E8F0EA',
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    elevation: 4,
+    paddingBottom: spacing.xxl,
   },
-  cardSectionTitle: {
-    fontFamily: appFont,
-    fontSize: 15,
-    fontWeight: '600',
-    color: palette.charcoal,
-    marginBottom: spacing.xs,
-  },
-  formRow: {
+  field: {
     gap: spacing.sm,
   },
-  formRowHeader: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  formIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: palette.brandGreen,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  formLabel: {
-    fontFamily: appFont,
-    color: palette.charcoal,
-    fontWeight: '600',
+  label: {
+    fontFamily: Fonts.bold,
     fontSize: 14,
+    fontWeight: '600',
+    color: palette.white,
   },
   input: {
-    backgroundColor: '#F8FBF9',
+    backgroundColor: 'rgba(255,255,255,0.15)',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
-    borderRadius: spacing.md,
-    fontSize: 15,
-    color: palette.charcoal,
-    fontFamily: appFont,
+    borderRadius: 12,
+    fontSize: 16,
+    color: palette.white,
+    fontFamily: Fonts.regular,
     borderWidth: 1,
-    borderColor: '#E1EDE4',
+    borderColor: 'rgba(255,255,255,0.3)',
   },
-  languageGroup: {
+  inputError: {
+    borderColor: palette.danger,
+  },
+  passwordRow: {
+    position: 'relative',
+  },
+  passwordInput: {
+    paddingRight: 44,
+  },
+  passwordToggle: {
+    position: 'absolute',
+    right: 12,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+  },
+  errorText: {
+    fontFamily: Fonts.regular,
+    fontSize: 12,
+    color: palette.danger,
+  },
+
+  // Language
+  languageGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
@@ -661,18 +486,18 @@ const styles = StyleSheet.create({
   languageOption: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
-    borderRadius: spacing.md,
+    borderRadius: 20,
     borderWidth: 1.5,
-    borderColor: '#C8E6C9',
-    backgroundColor: palette.white,
+    borderColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
   },
   languageSelected: {
-    borderColor: palette.brandGreen,
-    backgroundColor: palette.brandGreen,
+    borderColor: palette.white,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   languageLabel: {
-    fontFamily: appFont,
-    color: palette.charcoal,
+    fontFamily: Fonts.regular,
+    color: palette.white,
     fontSize: 14,
     fontWeight: '500',
   },
@@ -680,6 +505,8 @@ const styles = StyleSheet.create({
     color: palette.white,
     fontWeight: '600',
   },
+
+  // Chips
   chipGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -690,23 +517,25 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm + 2,
     borderRadius: radius.pill,
     borderWidth: 1.5,
-    borderColor: '#C8E6C9',
-    backgroundColor: palette.white,
+    borderColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
   },
   chipSelected: {
-    backgroundColor: palette.brandGreen,
-    borderColor: palette.brandGreen,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderColor: palette.white,
   },
   chipLabel: {
-    fontFamily: appFont,
+    fontFamily: Fonts.regular,
     fontSize: 13,
-    color: palette.charcoal,
+    color: palette.white,
     fontWeight: '500',
   },
   chipLabelSelected: {
     color: palette.white,
     fontWeight: '600',
   },
+
+  // Location
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -720,9 +549,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   locationValue: {
-    fontFamily: appFont,
+    fontFamily: Fonts.regular,
     fontSize: 14,
-    color: palette.gray500,
+    color: 'rgba(255,255,255,0.8)',
     flex: 1,
   },
   gpsButton: {
@@ -731,56 +560,34 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    borderRadius: spacing.md,
-    backgroundColor: palette.brandGreen,
+    borderRadius: 12,
+    backgroundColor: palette.white,
   },
   gpsButtonDisabled: {
     opacity: 0.6,
   },
   gpsButtonLabel: {
-    fontFamily: appFont,
-    color: palette.white,
+    fontFamily: Fonts.bold,
+    color: palette.brandGreen,
     fontSize: 14,
     fontWeight: '600',
   },
-  submitSection: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
-    paddingBottom: spacing.xl,
-  },
+
+  // Submit Button
   submitButton: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  submitGradient: {
-    flexDirection: 'row',
+    backgroundColor: palette.white,
+    borderRadius: 12,
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg + 2,
+    marginTop: spacing.md,
   },
   submitDisabled: {
-    opacity: 0.65,
+    opacity: 0.6,
   },
   submitLabel: {
-    fontFamily: appFont,
-    color: palette.white,
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  inputError: {
-    borderColor: palette.danger,
-    borderWidth: 1,
-  },
-  errorText: {
-    fontFamily: appFont,
-    fontSize: 12,
-    color: palette.danger,
-    marginTop: spacing.xs,
+    fontFamily: Fonts.bold,
+    color: palette.brandGreen,
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

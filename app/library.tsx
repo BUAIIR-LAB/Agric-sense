@@ -15,14 +15,14 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAppContext } from '@/context/AppContext';
 import { useSweetAlert } from '@/components/AlertProvider';
+import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { EmptyState } from '@/components/EmptyState';
-import { NetworkStatusBar } from '@/components/NetworkStatusBar';
 import { SkeletonCard } from '@/components/SkeletonLoader';
 import { palette } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
 import apiService from '@/services/api';
 
-const appFont = Platform.select({ ios: 'SF Pro Text', android: 'Roboto' }) ?? 'System';
+import { appFont, Fonts } from '@/theme/fonts';
 
 type Conversation = {
   conversation_id: string;
@@ -36,6 +36,7 @@ export default function LibraryScreen() {
   const router = useRouter();
   const { state } = useAppContext();
   const { showAlert } = useSweetAlert();
+  const { isReady } = useAuthGuard();
   const insets = useSafeAreaInsets();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -43,7 +44,7 @@ export default function LibraryScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const loadConversations = useCallback(async () => {
-    if (!state.profile?.id) {
+    if (!state.isAuthenticated || !state.profile?.id) {
       setError('Please log in to view conversations');
       setIsLoading(false);
       return;
@@ -52,11 +53,11 @@ export default function LibraryScreen() {
     try {
       setError(null);
       const data = await apiService.getConversations(state.profile.id);
-      
+
       // Handle API response format
       // Response format: {"conversations": [{"id": "...", "created_at": "...", "updated_at": "...", "metadata": {...}, "message_count": ...}, ...]}
       let conversationsList: Conversation[] = [];
-      
+
       if (Array.isArray(data)) {
         conversationsList = data.map((conv: any) => {
           // Extract conversation details from the API response
@@ -70,12 +71,12 @@ export default function LibraryScreen() {
           };
         });
       }
-      
+
       // Sort by updated_at or created_at (most recent first)
       conversationsList.sort((a, b) => {
         const dateA = a.updated_at || a.created_at || '';
         const dateB = b.updated_at || b.created_at || '';
-        
+
         // Convert to timestamps for proper comparison
         // Most recent (larger timestamp) should come first
         try {
@@ -87,7 +88,7 @@ export default function LibraryScreen() {
           return dateB.localeCompare(dateA);
         }
       });
-      
+
       setConversations(conversationsList);
     } catch (error: any) {
       console.error('Error loading conversations:', error);
@@ -115,7 +116,7 @@ export default function LibraryScreen() {
       const now = new Date();
       const diff = now.getTime() - date.getTime();
       const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-      
+
       if (days === 0) {
         return 'Today';
       } else if (days === 1) {
@@ -146,7 +147,7 @@ export default function LibraryScreen() {
         onPress={() => router.back()}
         style={styles.backButton}
       >
-        <MaterialCommunityIcons name="arrow-left" size={24} color={palette.charcoal} />
+        <MaterialCommunityIcons name="arrow-left" size={24} color={palette.text.primary} />
       </Pressable>
       <Text style={styles.headerTitle}>Conversations</Text>
       <View style={styles.headerSpacer} />
@@ -154,10 +155,10 @@ export default function LibraryScreen() {
   );
 
   const renderConversation = ({ item }: { item: Conversation }) => {
-    const shortId = item.conversation_id.length > 12 
-      ? `${item.conversation_id.substring(0, 8)}...` 
+    const shortId = item.conversation_id.length > 12
+      ? `${item.conversation_id.substring(0, 8)}...`
       : item.conversation_id;
-    
+
     return (
       <Pressable
         style={styles.conversationCard}
@@ -186,18 +187,27 @@ export default function LibraryScreen() {
             </Text>
           )}
         </View>
-        <MaterialCommunityIcons name="chevron-right" size={24} color={palette.gray500} />
+        <MaterialCommunityIcons name="chevron-right" size={24} color={palette.text.tertiary} />
       </Pressable>
     );
   };
 
+  if (!isReady) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={palette.brandGreen} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <NetworkStatusBar />
       <FlatList
         data={conversations}
-        keyExtractor={(item) => item.conversation_id}
-        renderItem={renderConversation}
+        keyExtractor={(item: Conversation) => item.conversation_id}
+        renderItem={({ item }: { item: Conversation }) => renderConversation({ item })}
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={
           isLoading ? (
@@ -251,7 +261,7 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     backgroundColor: palette.white,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5E5',
+    borderBottomColor: palette.gray200 || '#E5E5E5',
   },
   backButton: {
     width: 40,
@@ -281,18 +291,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5E5',
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 12,
+    borderWidth: 1,
+    borderColor: palette.gray200 || '#E5E5E5',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 12,
+    shadowRadius: 8,
+    elevation: 3,
   },
   conversationIcon: {
     width: 48,

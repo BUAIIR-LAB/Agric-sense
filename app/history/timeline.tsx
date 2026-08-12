@@ -12,72 +12,41 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
 import { useAppContext } from '@/context/AppContext';
-import { useSweetAlert } from '@/components/AlertProvider';
+import { useDeleteRecord } from '@/hooks/useDeleteRecord';
+import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { buildTimelineEntries, summarize } from '@/utils/historyTimeline';
 import { palette } from '@/theme/colors';
 import { spacing, radius } from '@/theme/spacing';
 import { shadows } from '@/theme/shadows';
 import { useTranslation } from '@/localization/useTranslation';
 
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
-const summarize = (value: string, limit = 200) => (value.length > limit ? `${value.slice(0, limit - 1)}…` : value);
-
-type TimelineEntry = {
-  id: string;
-  recordId: string;
-  timestamp: string;
-  title: string;
-  summary: string;
-  meta: string;
-  type: 'diagnosis' | 'spectroscopy';
-  icon: keyof typeof MaterialCommunityIcons.glyphMap;
-};
+import { appFont, Fonts } from '@/theme/fonts';
 
 export default function TimelineScreen() {
-  const { state, removeDiagnosisRecord, removeSpectroscopyRecord } = useAppContext();
+  const { state } = useAppContext();
+  const { deleteRecord } = useDeleteRecord();
+  const { isReady } = useAuthGuard();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { t, tp, formatNumber, formatDateTime } = useTranslation();
 
   const [menuTarget, setMenuTarget] = useState<{ type: 'diagnosis' | 'spectroscopy'; id: string } | null>(null);
 
-  const events: TimelineEntry[] = useMemo(() => {
-    const diagnosisEntries = state.diagnosisHistory.map((entry) => {
-      const confidence = formatNumber(Math.round(entry.confidence * 100));
-      const recommendations = tp('history.meta.recommendations', entry.recommendations.length, {
-        value: formatNumber(entry.recommendations.length),
-      });
-      return {
-        id: `diagnosis-${entry.id}`,
-        recordId: entry.id,
-        timestamp: entry.timestamp,
-        title: entry.suspectedIssues[0] ?? t('history.fallbacks.diagnosisTitle'),
-        summary: entry.summary,
-        meta: `${t('history.meta.confidence', { value: confidence })} • ${recommendations}`,
-        type: 'diagnosis' as const,
-        icon: 'microscope',
-      };
-    });
+  const events = useMemo(
+    () =>
+      buildTimelineEntries(state.diagnosisHistory, state.spectroscopyHistory, {
+        diagnosisTitle: t('history.fallbacks.diagnosisTitle'),
+        spectrumTitle: t('history.fallbacks.spectrumTitle'),
+        confidence: (value) => t('history.meta.confidence', { value }),
+        recommendations: (value, count) => tp('history.meta.recommendations', count, { value }),
+        insights: (value, count) => tp('history.meta.insights', count, { value }),
+      }, formatNumber),
+    [formatNumber, state.diagnosisHistory, state.spectroscopyHistory, t, tp],
+  );
 
-    const spectroscopyEntries = state.spectroscopyHistory.map((entry) => {
-      const insights = tp('history.meta.insights', entry.insights.length, {
-        value: formatNumber(entry.insights.length),
-      });
-      return {
-        id: `spectroscopy-${entry.id}`,
-        recordId: entry.id,
-        timestamp: entry.timestamp,
-        title: entry.sampleName || t('history.fallbacks.spectrumTitle'),
-        summary: entry.summary,
-        meta: insights,
-        type: 'spectroscopy' as const,
-        icon: 'chart-timeline-variant',
-      };
-    });
-
-    return [...diagnosisEntries, ...spectroscopyEntries].sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-  }, [formatNumber, state.diagnosisHistory, state.spectroscopyHistory, t, tp]);
+  if (!isReady) {
+    return null;
+  }
 
   const toggleMenu = (type: 'diagnosis' | 'spectroscopy', id: string) => {
     setMenuTarget((previous) => {
@@ -96,36 +65,9 @@ export default function TimelineScreen() {
     router.push(`/history/${type}/${id}`);
   };
 
-  const confirmDelete = (type: 'diagnosis' | 'spectroscopy', id: string) => {
-    const title =
-      type === 'diagnosis'
-        ? t('history.dialog.removeDiagnosisTitle')
-        : t('history.dialog.removeSpectrumTitle');
-    const message =
-      type === 'diagnosis'
-        ? t('history.dialog.removeDiagnosisMessage')
-        : t('history.dialog.removeSpectrumMessage');
-
-    showAlert(
-      'warning',
-      title,
-      message,
-      {
-        showCancel: true,
-        confirmText: t('common.actions.delete'),
-        cancelText: t('common.actions.cancel'),
-        onCancel: () => setMenuTarget(null),
-        onConfirm: () => {
-          if (type === 'diagnosis') {
-            removeDiagnosisRecord(id);
-          } else {
-            removeSpectroscopyRecord(id);
-          }
-          setMenuTarget(null);
-          showAlert('success', 'Record Deleted', 'The record has been successfully deleted.');
-        },
-      }
-    );
+  const confirmDelete = async (type: 'diagnosis' | 'spectroscopy', id: string) => {
+    setMenuTarget(null);
+    await deleteRecord(type, id);
   };
 
   return (
@@ -270,12 +212,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    borderRadius: radius.xl * 1.2,
+    borderRadius: 20,
     padding: spacing.xl,
-    ...shadows.medium,
     backgroundColor: palette.brandGreen,
     width: '100%',
     marginHorizontal: spacing.xl,
+    shadowColor: '#1B5E20',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
   },
   contentCard: {
     alignSelf: 'stretch',
@@ -284,26 +230,25 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xl,
     gap: spacing.lg,
     shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 12,
-    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
     shadowRadius: 12,
-    elevation: 12,
-    borderTopLeftRadius: spacing.lg,
-    borderTopRightRadius: spacing.lg,
+    elevation: 4,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     marginTop: spacing.lg,
   },
   heroIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.xl,
-    backgroundColor: palette.brandGreenDark,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
   heroCopy: {
     flex: 1,

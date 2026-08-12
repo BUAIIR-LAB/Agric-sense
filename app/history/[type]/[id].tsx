@@ -17,6 +17,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppContext } from '@/context/AppContext';
 import { useSweetAlert } from '@/components/AlertProvider';
+import { ResultAiActions } from '@/components/ResultAiActions';
+import { useAiAdvisor } from '@/hooks/useAiAdvisor';
+import { buildDiagnosisSession, diagnosisSuggestions } from '@/utils/aiAdvisor';
+import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { palette } from '@/theme/colors';
 import { radius, spacing } from '@/theme/spacing';
 import { shadows } from '@/theme/shadows';
@@ -28,33 +32,66 @@ const languageToCode: Record<string, string> = {
   English: 'en',
   Luganda: 'lg',
   Ateso: 'at',
-  Japadhola: 'jap',
-  Swahili: 'sw',
+  Acholi: 'ac',
+  Japadhola: 'jp',
   Runyankore: 'nyn',
 };
 
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
-const wallBackground = require('../../../assets/images/wall.jpg');
+import { appFont, Fonts } from '@/theme/fonts';
 
 type Params = {
   type?: string;
   id?: string;
 };
 
+interface DiagnosisRecord {
+  id: string;
+  imageUri: string | null;
+  image_base64?: string;
+  suspectedIssues: string[];
+  confidence: number;
+  summary: string;
+  recommendations: string[];
+  followUpQuestion?: string;
+  followUpResponse?: string;
+  timestamp: string;
+}
+
+interface SpectroscopyRecord {
+  id: string;
+  sampleName: string;
+  spectrum: Array<{ wavelength: number; intensity: number }>;
+  summary: string;
+  insights: string[];
+  timestamp: string;
+}
+
 export default function HistoryDetailScreen() {
   const { type, id } = useLocalSearchParams<Params>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { state, removeDiagnosisRecord, removeSpectroscopyRecord, removeDiagnosisRecordWithAPI, removeSpectroscopyRecordWithAPI, profile } = useAppContext();
+  const { isReady } = useAuthGuard();
+  const { state, removeDiagnosisRecord, removeSpectroscopyRecord, removeDiagnosisRecordWithAPI, removeSpectroscopyRecordWithAPI } = useAppContext();
+  const { openSeeded } = useAiAdvisor();
+  const profile = state.profile;
   const { width } = useWindowDimensions();
   const { t, formatNumber, formatDateTime } = useTranslation();
   const [advisoryResponse, setAdvisoryResponse] = useState<string | null>(null);
   const [isLoadingAdvisory, setIsLoadingAdvisory] = useState(false);
+  const [advisoryConversationId, setAdvisoryConversationId] = useState<string | null>(null);
+  const [advisoryPrompt, setAdvisoryPrompt] = useState<string | null>(null);
 
   const recordType = type === 'diagnosis' || type === 'spectroscopy' ? type : null;
-
-  const [record, setRecord] = useState<any>(null);
+  const [record, setRecord] = useState<DiagnosisRecord | SpectroscopyRecord | null>(null);
   const [isLoadingRecord, setIsLoadingRecord] = useState(true);
+
+  const isInconclusive = useMemo(() => {
+    if (recordType === 'diagnosis' && record) {
+      const diag = record as DiagnosisRecord;
+      return diag.suspectedIssues[0]?.toLowerCase().includes('other');
+    }
+    return false;
+  }, [recordType, record]);
 
   // Load record from local state or API
   useEffect(() => {
@@ -91,14 +128,14 @@ export default function HistoryDetailScreen() {
           // Map API response to local format
           const mappedRecord = {
             id: apiRecord.id,
-            imageUri: apiRecord.image_uri,
+            imageUri: apiRecord.image_uri || null,
             image_base64: apiRecord.image_base64,
             suspectedIssues: apiRecord.suspected_issues,
             confidence: apiRecord.confidence,
             summary: apiRecord.summary,
             recommendations: apiRecord.recommendations,
-            followUpQuestion: apiRecord.follow_up_question,
-            followUpResponse: apiRecord.follow_up_response,
+            followUpQuestion: apiRecord.follow_up_question || undefined,
+            followUpResponse: apiRecord.follow_up_response || undefined,
             timestamp: apiRecord.timestamp,
           };
           setRecord(mappedRecord);
@@ -127,16 +164,18 @@ export default function HistoryDetailScreen() {
 
   // Fetch advisory for diagnosis records
   useEffect(() => {
-    if (recordType === 'diagnosis' && record && profile) {
-      fetchAdvisory(record);
+    if (recordType === 'diagnosis' && record && profile && !isInconclusive) {
+      fetchAdvisory(record as DiagnosisRecord);
     }
-  }, [recordType, record, profile]);
+  }, [recordType, record, profile, isInconclusive]);
 
-  const fetchAdvisory = async (diagnosis: any) => {
+  const fetchAdvisory = async (diagnosis: DiagnosisRecord) => {
     if (!profile) return;
 
     setIsLoadingAdvisory(true);
     setAdvisoryResponse(null);
+    setAdvisoryConversationId(null);
+    setAdvisoryPrompt(null);
 
     try {
       const isHealthy = diagnosis.suspectedIssues[0]?.toLowerCase().includes('healthy');
@@ -144,10 +183,10 @@ export default function HistoryDetailScreen() {
       const confidence = Math.round(diagnosis.confidence * 100);
 
       let prompt: string;
-      const cropsContext = profile.cropsGrown.length > 0 
-        ? `I grow: ${profile.cropsGrown.join(', ')}. ` 
+      const cropsContext = profile.cropsGrown.length > 0
+        ? `I grow: ${profile.cropsGrown.join(', ')}. `
         : '';
-      
+
       if (isHealthy) {
         prompt = `I am a farmer ${cropsContext}and I just scanned my crop using an AI-powered diagnosis tool. The diagnosis shows my crop is healthy with ${confidence}% confidence.
 
@@ -163,7 +202,7 @@ Please provide practical, actionable advice that I can implement immediately. Us
         const recommendationsContext = diagnosis.recommendations.length > 0
           ? `\n\nRecommended actions: ${diagnosis.recommendations.join('; ')}`
           : '';
-        
+
         prompt = `I am a farmer ${cropsContext}and I just scanned my crop using an AI-powered diagnosis tool. The diagnosis detected: ${diagnosis.suspectedIssues.join(', ')} with ${confidence}% confidence.
 
 Diagnosis Summary: ${diagnosis.summary}${recommendationsContext}
@@ -171,14 +210,15 @@ Diagnosis Summary: ${diagnosis.summary}${recommendationsContext}
 Please provide me with comprehensive agricultural advisory:
 1. Detailed information about ${topDisease} - what causes it, how it spreads, and its impact on crops
 2. Immediate treatment options and management strategies I can apply right now
-3. How to prevent this disease from spreading to other plants
-4. Long-term prevention measures to avoid future outbreaks
-5. When to consult an agricultural extension officer or seek professional help
-6. Best practices for crop management to minimize disease risk
+3. Recommended farm inputs and treatments (fungicides, pesticides, fertilizers, or other products by type/active ingredient) that I can buy on the AgriSense marketplace — name specific product types to search for
+4. How to prevent this disease from spreading to other plants
+5. Long-term prevention measures to avoid future outbreaks
+6. When to consult an agricultural extension officer or seek professional help
 
 Please provide practical, actionable advice that I can implement immediately. Use clear, simple language that is easy to understand.`;
       }
 
+      setAdvisoryPrompt(prompt);
       const targetLang = languageToCode[profile.preferredLanguage] || 'en';
 
       const response = await apiService.askQuestion({
@@ -194,12 +234,57 @@ Please provide practical, actionable advice that I can implement immediately. Us
       });
 
       setAdvisoryResponse(response.results);
+      if (response.conversation_id) setAdvisoryConversationId(response.conversation_id);
     } catch (error: any) {
       console.error('❌ Failed to fetch advisory:', error);
       setAdvisoryResponse(null);
     } finally {
       setIsLoadingAdvisory(false);
     }
+  };
+
+  const continueDiagnosisChat = (followUp?: string) => {
+    const diagnosis = recordType === 'diagnosis' ? (record as DiagnosisRecord) : null;
+    if (!advisoryResponse || !diagnosis) return;
+    const disease = diagnosis.suspectedIssues[0] || 'an unknown condition';
+    const isHealthy = disease.toLowerCase().includes('healthy');
+    const userContent =
+      advisoryPrompt ||
+      `My crop was diagnosed with ${disease}. ${diagnosis.summary || ''} Please help me treat it and suggest AgriSense marketplace products.`;
+
+    const session = buildDiagnosisSession({
+      disease,
+      confidence: diagnosis.confidence,
+      isHealthy,
+      conversationId: advisoryConversationId,
+      sourceRecordId: diagnosis.id,
+    });
+
+    openSeeded({
+      session,
+      messages: [
+        { role: 'user', modality: 'text', content: userContent },
+        { role: 'assistant', modality: 'text', content: advisoryResponse },
+      ],
+      followUp,
+    });
+  };
+
+  const browseTreatmentsFromHistory = () => {
+    const diagnosis = recordType === 'diagnosis' ? (record as DiagnosisRecord) : null;
+    if (!diagnosis) return;
+    const q = (diagnosis.suspectedIssues[0] || '')
+      .replace(/\s*\(.*?\)\s*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60);
+    router.push({
+      pathname: '/(tabs)/marketplace',
+      params: {
+        mode: 'buy',
+        ...(q ? { q } : {}),
+      },
+    });
   };
 
   const { showAlert } = useSweetAlert();
@@ -290,19 +375,25 @@ Please provide practical, actionable advice that I can implement immediately. Us
   }
 
   const spectroscopyDataset =
-    recordType === 'spectroscopy'
+    recordType === 'spectroscopy' && record && 'spectrum' in record
       ? {
-          labels: record.spectrum.map((point) => point.wavelength.toString()),
-          datasets: [
-            {
-              data: record.spectrum.map((point) => point.intensity),
-              strokeWidth: 2,
-            },
-          ],
-        }
+        labels: record.spectrum.map((point) => point.wavelength.toString()),
+        datasets: [
+          {
+            data: record.spectrum.map((point) => point.intensity),
+            strokeWidth: 2,
+          },
+        ],
+      }
       : null;
   const chartWidth = Math.min(width - spacing.xl * 2, 520);
   const chartHeight = Math.min(280, Math.max(200, chartWidth * 0.45));
+  const diagRecord = recordType === 'diagnosis' ? (record as DiagnosisRecord) : null;
+  const spectroRecord = recordType === 'spectroscopy' ? (record as SpectroscopyRecord) : null;
+
+  if (!isReady) {
+    return null;
+  }
 
   return (
     <ScrollView
@@ -321,7 +412,7 @@ Please provide practical, actionable advice that I can implement immediately. Us
             accessibilityRole="button"
             accessibilityLabel={t('common.buttons.goBack')}
           >
-            <MaterialCommunityIcons name="arrow-left" size={20} color={palette.white} />
+            <MaterialCommunityIcons name="arrow-left" size={20} color={palette.brandGreen} />
           </Pressable>
           <Text style={styles.heroTitle}>
             {recordType === 'diagnosis'
@@ -334,7 +425,7 @@ Please provide practical, actionable advice that I can implement immediately. Us
             accessibilityRole="button"
             accessibilityLabel={t('common.actions.delete')}
           >
-            <MaterialCommunityIcons name="trash-can-outline" size={20} color={palette.white} />
+            <MaterialCommunityIcons name="trash-can-outline" size={20} color={palette.brandGreen} />
           </Pressable>
         </View>
         <Text style={styles.heroSubtitle}>
@@ -345,199 +436,226 @@ Please provide practical, actionable advice that I can implement immediately. Us
       </View>
 
       <View style={styles.contentCard}>
-      <View style={styles.metaCard}>
-        <View style={styles.metaRow}>
-          <MaterialCommunityIcons
-            name={recordType === 'diagnosis' ? 'microscope' : 'chart-timeline-variant'}
-            size={18}
-            color={palette.brandGreenDark}
-          />
-          <Text style={styles.metaLabel}>
-            {recordType === 'diagnosis' ? t('historyDetail.diagnosisLabel') : t('historyDetail.spectrumLabel')}
+        <View style={styles.metaCard}>
+          <View style={styles.metaRow}>
+            <MaterialCommunityIcons
+              name={recordType === 'diagnosis' ? 'microscope' : 'chart-timeline-variant'}
+              size={18}
+              color={palette.brandGreenDark}
+            />
+            <Text style={styles.metaLabel}>
+              {recordType === 'diagnosis' ? t('historyDetail.diagnosisLabel') : t('historyDetail.spectrumLabel')}
+            </Text>
+          </View>
+          <Text style={styles.metaValue}>
+            {formatDateTime(record.timestamp, { dateStyle: 'medium', timeStyle: 'short' })}
           </Text>
         </View>
-        <Text style={styles.metaValue}>
-          {formatDateTime(record.timestamp, { dateStyle: 'medium', timeStyle: 'short' })}
-        </Text>
-      </View>
 
-      {recordType === 'diagnosis' ? (
-        <View style={styles.detailCard}>
-          {record.imageUri ? (
-            <Image source={{ uri: record.imageUri }} style={styles.previewImage} resizeMode="cover" />
-          ) : (record as any).image_base64 ? (
-            <Image 
-              source={{ uri: `data:image/jpeg;base64,${(record as any).image_base64}` }} 
-              style={styles.previewImage} 
-              resizeMode="cover" 
-            />
-          ) : (
-            <View style={styles.previewPlaceholder}>
-              <MaterialCommunityIcons name="image-off-outline" size={28} color={palette.gray500} />
-              <Text style={styles.previewPlaceholderText}>{t('common.labels.noImage')}</Text>
-            </View>
-          )}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('historyDetail.suspectedIssues')}</Text>
-            {record.suspectedIssues.map((issue) => (
-              <View key={issue} style={styles.chip}>
-                <Text style={styles.chipLabel}>{issue}</Text>
+        {diagRecord && (
+          <View style={styles.detailCard}>
+            {diagRecord.imageUri ? (
+              <Image source={{ uri: diagRecord.imageUri }} style={styles.previewImage} resizeMode="cover" />
+            ) : diagRecord.image_base64 ? (
+              <Image
+                source={{ uri: `data:image/jpeg;base64,${diagRecord.image_base64}` }}
+                style={styles.previewImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.previewPlaceholder}>
+                <MaterialCommunityIcons name="image-off-outline" size={28} color={palette.gray500} />
+                <Text style={styles.previewPlaceholderText}>{t('common.labels.noImage')}</Text>
               </View>
-            ))}
-          </View>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('historyDetail.summary')}</Text>
-            <Text style={styles.sectionBody}>{record.summary}</Text>
-          </View>
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{t('historyDetail.recommendations')}</Text>
-              <Text style={styles.sectionMeta}>
-                {t('historyDetail.confidence', {
-                  value: formatNumber(Math.round(record.confidence * 100)),
-                })}
+            )}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('historyDetail.suspectedIssues')}</Text>
+              {diagRecord.suspectedIssues.map((issue) => {
+                const isOther = issue.toLowerCase().includes('other');
+                return (
+                  <View key={issue} style={[styles.chip, isOther && styles.chipInconclusive]}>
+                    <Text style={[styles.chipLabel, isOther && styles.chipLabelInconclusive]}>
+                      {isOther ? "Low Quality Image" : issue}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('historyDetail.summary')}</Text>
+              <Text style={styles.sectionBody}>
+                {isInconclusive
+                  ? "The image provided was not clear enough for a definitive plant disease diagnosis. Please try taking a closer, more well-lit photo of the affected plant area."
+                  : diagRecord.summary}
               </Text>
             </View>
-            {record.recommendations.map((recommendation, index) => (
-              <View key={`${recommendation}-${index}`} style={styles.listItem}>
-                <MaterialCommunityIcons name="check-circle-outline" size={16} color={palette.brandGreen} />
-                <Text style={styles.sectionBody}>{recommendation}</Text>
-              </View>
-            ))}
-          </View>
-          {record.followUpQuestion && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>{t('historyDetail.followUp')}</Text>
-              <Text style={styles.sectionMeta}>{record.followUpQuestion}</Text>
-              {record.followUpResponse ? (
-                <Text style={styles.sectionBody}>{record.followUpResponse}</Text>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>
+                  {isInconclusive ? "Result Status" : t('historyDetail.recommendations')}
+                </Text>
+                {!isInconclusive && (
+                  <Text style={styles.sectionMeta}>
+                    {t('historyDetail.confidence', {
+                      value: formatNumber(Math.round(diagRecord.confidence * 100)),
+                    })}
+                  </Text>
+                )}
+              </View>
+              {isInconclusive ? (
+                <View style={styles.listItem}>
+                  <MaterialCommunityIcons name="camera-off" size={16} color={palette.gray500} />
+                  <Text style={[styles.sectionBody, { color: palette.gray600 }]}>Bad Image</Text>
+                </View>
               ) : (
-                <Text style={styles.sectionBodyMuted}>{t('common.labels.noResponse')}</Text>
+                diagRecord.recommendations.map((recommendation, index) => (
+                  <View key={`${recommendation}-${index}`} style={styles.listItem}>
+                    <MaterialCommunityIcons name="check-circle-outline" size={16} color={palette.brandGreen} />
+                    <Text style={styles.sectionBody}>{recommendation}</Text>
+                  </View>
+                ))
               )}
             </View>
-          )}
-
-          {/* Professional Advisory Section */}
-          <View style={styles.advisoryCard}>
-            <View style={styles.advisoryHeader}>
-              <View style={styles.advisoryHeaderContent}>
-                <View style={[
-                  styles.advisoryIconBadge,
-                  record.suspectedIssues[0]?.toLowerCase().includes('healthy') 
-                    ? styles.advisoryIconBadgeHealthy 
-                    : styles.advisoryIconBadgeDiseased
-                ]}>
-                  <MaterialCommunityIcons 
-                    name={record.suspectedIssues[0]?.toLowerCase().includes('healthy') ? 'leaf-circle' : 'shield-check'} 
-                    size={28} 
-                    color={palette.white} 
-                  />
-                </View>
-                <View style={styles.advisoryHeaderText}>
-                  <Text style={styles.advisoryTitle}>
-                    {record.suspectedIssues[0]?.toLowerCase().includes('healthy') 
-                      ? 'Crop Health Advisory' 
-                      : 'Expert Advisory'}
-                  </Text>
-                  <Text style={styles.advisorySubtitle}>
-                    {record.suspectedIssues[0]?.toLowerCase().includes('healthy')
-                      ? 'Maintain your healthy crop'
-                      : 'Professional guidance & prevention'}
-                  </Text>
-                </View>
+            {diagRecord.followUpQuestion && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t('historyDetail.followUp')}</Text>
+                <Text style={styles.sectionMeta}>{diagRecord.followUpQuestion}</Text>
+                {diagRecord.followUpResponse ? (
+                  <Text style={styles.sectionBody}>{diagRecord.followUpResponse}</Text>
+                ) : (
+                  <Text style={styles.sectionBodyMuted}>{t('common.labels.noResponse')}</Text>
+                )}
               </View>
-            </View>
+            )}
 
-            <View style={styles.advisoryDivider} />
+            {/* Professional Advisory Section */}
+            {!isInconclusive && (
+              <View style={styles.advisoryCard}>
+                <View style={styles.advisoryHeader}>
+                  <View style={styles.advisoryHeaderContent}>
+                    <View style={[
+                      styles.advisoryIconBadge,
+                      diagRecord.suspectedIssues[0]?.toLowerCase().includes('healthy')
+                        ? styles.advisoryIconBadgeHealthy
+                        : styles.advisoryIconBadgeDiseased
+                    ]}>
+                      <MaterialCommunityIcons
+                        name={diagRecord.suspectedIssues[0]?.toLowerCase().includes('healthy') ? 'leaf-circle' : 'shield-check'}
+                        size={28}
+                        color={palette.white}
+                      />
+                    </View>
+                    <View style={styles.advisoryHeaderText}>
+                      <Text style={styles.advisoryTitle}>
+                        {diagRecord.suspectedIssues[0]?.toLowerCase().includes('healthy')
+                          ? 'Crop Health Advisory'
+                          : 'Expert Advisory'}
+                      </Text>
+                      <Text style={styles.advisorySubtitle}>
+                        {diagRecord.suspectedIssues[0]?.toLowerCase().includes('healthy')
+                          ? 'Maintain your healthy crop'
+                          : 'Professional guidance & prevention'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
 
-            {isLoadingAdvisory ? (
-              <View style={styles.advisoryLoading}>
-                <ActivityIndicator size="small" color={palette.brandGreen} />
-                <View style={styles.advisoryLoadingContent}>
-                  <Text style={styles.advisoryLoadingText}>Getting expert advice...</Text>
-                  <Text style={styles.advisoryLoadingSubtext}>This may take a few moments</Text>
-                </View>
-              </View>
-            ) : advisoryResponse ? (
-              <View style={styles.advisoryContent}>
-                <View style={styles.advisoryTextContainer}>
-                  <Text style={styles.advisoryText}>{advisoryResponse}</Text>
-                </View>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.chatButton,
-                    pressed && styles.chatButtonPressed
-                  ]}
-                  onPress={() => router.push('/(tabs)/chat')}
-                >
-                  <MaterialCommunityIcons name="message-text-outline" size={20} color={palette.white} />
-                  <Text style={styles.chatButtonText}>Ask More Questions</Text>
-                  <MaterialCommunityIcons name="chevron-right" size={18} color={palette.white} />
-                </Pressable>
-              </View>
-            ) : (
-              <View style={styles.advisoryPlaceholder}>
-                <View style={styles.advisoryPlaceholderIcon}>
-                  <MaterialCommunityIcons name="information-outline" size={40} color={palette.gray500} />
-                </View>
-                <Text style={styles.advisoryPlaceholderText}>
-                  Advisory information will appear here
-                </Text>
-                <Text style={styles.advisoryPlaceholderSubtext}>
-                  Expert guidance based on your diagnosis
-                </Text>
+                <View style={styles.advisoryDivider} />
+
+                {isLoadingAdvisory ? (
+                  <View style={styles.advisoryLoading}>
+                    <ActivityIndicator size="small" color={palette.brandGreen} />
+                    <View style={styles.advisoryLoadingContent}>
+                      <Text style={styles.advisoryLoadingText}>Getting expert advice...</Text>
+                      <Text style={styles.advisoryLoadingSubtext}>This may take a few moments</Text>
+                    </View>
+                  </View>
+                ) : advisoryResponse ? (
+                  <View style={styles.advisoryContent}>
+                    <View style={styles.advisoryTextContainer}>
+                      <Text style={styles.advisoryText}>{advisoryResponse}</Text>
+                    </View>
+                    <ResultAiActions
+                      onAskAi={() => continueDiagnosisChat()}
+                      onShop={
+                        !diagRecord.suspectedIssues[0]?.toLowerCase().includes('healthy')
+                          ? browseTreatmentsFromHistory
+                          : undefined
+                      }
+                      shopLabel="Find treatments"
+                      suggestions={diagnosisSuggestions(
+                        diagRecord.suspectedIssues[0] || 'crop health',
+                        !!diagRecord.suspectedIssues[0]?.toLowerCase().includes('healthy'),
+                      )}
+                      onSuggestion={(q) => continueDiagnosisChat(q)}
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.advisoryPlaceholder}>
+                    <View style={styles.advisoryPlaceholderIcon}>
+                      <MaterialCommunityIcons name="information-outline" size={40} color={palette.gray500} />
+                    </View>
+                    <Text style={styles.advisoryPlaceholderText}>
+                      Advisory information will appear here
+                    </Text>
+                    <Text style={styles.advisoryPlaceholderSubtext}>
+                      Expert guidance based on your diagnosis
+                    </Text>
+                  </View>
+                )}
               </View>
             )}
           </View>
-        </View>
-      ) : (
-        <View style={styles.detailCard}>
-          {spectroscopyDataset && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>{t('historyDetail.spectralTrace')}</Text>
-              <LineChart
-                data={spectroscopyDataset}
-                width={chartWidth}
-                height={chartHeight}
-                withDots={false}
-                withInnerLines
-                chartConfig={{
-                  backgroundColor: 'transparent',
-                  backgroundGradientFrom: '#FFFFFF',
-                  backgroundGradientFromOpacity: 0,
-                  backgroundGradientTo: '#FFFFFF',
-                  backgroundGradientToOpacity: 0,
-                  color: (opacity = 1) => `rgba(46,125,50,${opacity})`,
-                  strokeWidth: 2,
-                  propsForBackgroundLines: {
-                    strokeDasharray: '4 8',
-                    stroke: 'rgba(46,125,50,0.25)',
-                  },
-                }}
-                bezier
-                style={styles.chart}
-              />
-            </View>
-          )}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('historyDetail.sampleName')}</Text>
-            <Text style={styles.sectionBody}>{record.sampleName}</Text>
-          </View>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('historyDetail.summary')}</Text>
-            <Text style={styles.sectionBody}>{record.summary}</Text>
-          </View>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('historyDetail.insights')}</Text>
-            {record.insights.map((insight, index) => (
-              <View key={`${insight}-${index}`} style={styles.listItem}>
-                <MaterialCommunityIcons name="pulse" size={16} color={palette.brandGreen} />
-                <Text style={styles.sectionBody}>{insight}</Text>
+        )}
+
+        {spectroRecord && (
+          <View style={styles.detailCard}>
+            {spectroscopyDataset && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t('historyDetail.spectralTrace')}</Text>
+                <LineChart
+                  data={spectroscopyDataset}
+                  width={chartWidth}
+                  height={chartHeight}
+                  withDots={false}
+                  withInnerLines
+                  chartConfig={{
+                    backgroundColor: 'transparent',
+                    backgroundGradientFrom: palette.white,
+                    backgroundGradientFromOpacity: 0,
+                    backgroundGradientTo: palette.white,
+                    backgroundGradientToOpacity: 0,
+                    color: (opacity = 1) => `rgba(46,125,50,${opacity})`,
+                    strokeWidth: 2,
+                    propsForBackgroundLines: {
+                      strokeDasharray: '4 8',
+                      stroke: 'rgba(46,125,50,0.25)',
+                    },
+                  }}
+                  bezier
+                  style={styles.chart}
+                />
               </View>
-            ))}
+            )}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('historyDetail.sampleName')}</Text>
+              <Text style={styles.sectionBody}>{spectroRecord.sampleName}</Text>
+            </View>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('historyDetail.summary')}</Text>
+              <Text style={styles.sectionBody}>{spectroRecord.summary}</Text>
+            </View>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('historyDetail.insights')}</Text>
+              {spectroRecord.insights.map((insight, index) => (
+                <View key={`${insight}-${index}`} style={styles.listItem}>
+                  <MaterialCommunityIcons name="pulse" size={16} color={palette.brandGreen} />
+                  <Text style={styles.sectionBody}>{insight}</Text>
+                </View>
+              ))}
+            </View>
           </View>
-        </View>
-      )}
+        )}
       </View>
     </ScrollView>
   );
@@ -546,25 +664,28 @@ Please provide practical, actionable advice that I can implement immediately. Us
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: palette.brandGreen,
+    backgroundColor: '#F5FBF6',
   },
   container: {
     paddingHorizontal: 0,
     gap: spacing.lg,
-    backgroundColor: palette.brandGreen,
+    backgroundColor: '#F5FBF6',
     alignItems: 'stretch',
   },
   heroPanel: {
-    borderRadius: radius.xl * 1.2,
+    borderRadius: 20,
     padding: spacing.lg,
     gap: spacing.sm,
-    shadowColor: 'rgba(48, 82, 30, 0.3)',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.24,
-    shadowRadius: 22,
-    backgroundColor: palette.brandGreen,
+    shadowColor: 'rgba(48, 82, 30, 0.1)',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
+    backgroundColor: palette.white,
     width: '100%',
     marginHorizontal: spacing.xl,
+    borderWidth: 1,
+    borderColor: '#E8F1EB',
   },
   contentCard: {
     alignSelf: 'stretch',
@@ -572,16 +693,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.xl,
     gap: spacing.lg,
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 12,
-    shadowOpacity: 0.1,
+    shadowColor: palette.brandGreenDark,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
     shadowRadius: 12,
-    elevation: 12,
-    borderTopLeftRadius: spacing.lg,
-    borderTopRightRadius: spacing.lg,
+    elevation: 4,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     marginTop: spacing.lg,
@@ -590,13 +708,13 @@ const styles = StyleSheet.create({
     fontFamily: appFont,
     fontSize: 18,
     fontWeight: '700',
-    color: palette.white,
+    color: palette.brandGreenDark,
     textAlign: 'center',
   },
   heroSubtitle: {
     fontFamily: appFont,
     fontSize: 13,
-    color: 'rgba(255,255,255,0.85)',
+    color: palette.gray600,
     textAlign: 'center',
   },
   header: {
@@ -613,9 +731,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   heroIconButton: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: '#F0F7F1',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.35)',
+    borderColor: '#E1EAE4',
   },
   iconButtonDanger: {
     backgroundColor: 'rgba(216,67,21,0.1)',
@@ -732,9 +850,15 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     marginTop: spacing.sm,
   },
+  chipInconclusive: {
+    backgroundColor: palette.gray100,
+  },
+  chipLabelInconclusive: {
+    color: palette.gray600,
+  },
   emptyState: {
     flex: 1,
-    backgroundColor: palette.brandGreen,
+    backgroundColor: '#F5FBF6',
     alignItems: 'center',
     gap: spacing.md,
     alignSelf: 'stretch',
@@ -777,14 +901,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E8F5E9',
     shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 12,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.1,
     shadowRadius: 12,
-    elevation: 12,
+    elevation: 6,
     marginTop: spacing.lg,
     overflow: 'hidden',
   },
@@ -919,6 +1039,26 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 12,
+  },
+  marketButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: palette.white,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    marginBottom: spacing.sm,
+    borderWidth: 1.5,
+    borderColor: palette.brandGreen + '50',
+  },
+  marketButtonText: {
+    fontFamily: appFont,
+    color: palette.brandGreen,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   chatButtonPressed: {
     opacity: 0.8,

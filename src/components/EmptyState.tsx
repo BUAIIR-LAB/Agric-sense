@@ -1,10 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { palette } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+import { appFont } from '@/theme/fonts';
 
 export interface EmptyStateProps {
   icon: keyof typeof MaterialCommunityIcons.glyphMap;

@@ -1,11 +1,10 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Platform } from 'react-native';
+import { View, Text, StyleSheet, Animated } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
 import { palette } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+import { appFont } from '@/theme/fonts';
 
 export const NetworkStatusBar: React.FC = () => {
   const { isConnected, isInternetReachable } = useNetworkStatus();

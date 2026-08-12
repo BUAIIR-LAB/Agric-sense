@@ -7,7 +7,7 @@ import { useAppContext } from '@/context/AppContext';
 import { useSweetAlert } from '@/components/AlertProvider';
 import { palette } from '@/theme/colors';
 
-const appFont = Platform.select({ ios: 'HelveticaNeue', android: 'sans-serif' }) ?? 'System';
+import { appFont, Fonts } from '@/theme/fonts';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -169,8 +169,8 @@ export default function ProfileScreen() {
         <Pressable style={styles.outlineButton} onPress={handleClearSpectroscopy}>
           <Text style={[styles.outlineLabel, styles.textShadow]}>Clear Spectroscopy</Text>
         </Pressable>
-        <Pressable 
-          style={[styles.alertButton, isResetting && styles.alertButtonDisabled]} 
+        <Pressable
+          style={[styles.alertButton, isResetting && styles.alertButtonDisabled]}
           onPress={confirmReset}
           disabled={isResetting}
         >
@@ -243,11 +243,6 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 12,
     borderColor: '#E1EAE4',
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 12,
   },
   avatarLarge: {
     width: 72,
@@ -329,12 +324,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 12,
     elevation: 12,
-    borderColor: '#E1EAE4',
-    shadowColor: '#1B5E20',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 12,
+    borderColor: '#E1EAE4'
   },
   statIcon: {
     width: 34,
@@ -366,8 +356,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.12,
     shadowRadius: 14,
-    elevation: 12,
-    shadowRadius: 10,
+    elevation: 12
   },
   cardHeader: {
     flexDirection: 'row',

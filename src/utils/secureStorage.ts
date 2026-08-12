@@ -1,20 +1,21 @@
 import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const TOKEN_KEY = 'auth_token';
+const SENSITIVE_KEYS = new Set(['auth_token']);
 
 /**
- * Secure storage utility for sensitive data like auth tokens
- * Falls back to AsyncStorage if SecureStore is not available
+ * Secure storage for sensitive data. Auth tokens never fall back to AsyncStorage.
  */
 export const secureStorage = {
   async setItem(key: string, value: string): Promise<void> {
     try {
       await SecureStore.setItemAsync(key, value);
     } catch (error) {
-      // Fallback to AsyncStorage if SecureStore fails
-      console.warn('SecureStore not available, using AsyncStorage:', error);
-      await AsyncStorage.setItem(key, value);
+      if (SENSITIVE_KEYS.has(key)) {
+        console.error('SecureStore failed for sensitive key — refusing AsyncStorage fallback:', error);
+        throw error;
+      }
+      console.warn('SecureStore not available:', error);
+      throw error;
     }
   },
 
@@ -22,9 +23,12 @@ export const secureStorage = {
     try {
       return await SecureStore.getItemAsync(key);
     } catch (error) {
-      // Fallback to AsyncStorage if SecureStore fails
-      console.warn('SecureStore not available, using AsyncStorage:', error);
-      return await AsyncStorage.getItem(key);
+      if (SENSITIVE_KEYS.has(key)) {
+        console.error('SecureStore read failed for sensitive key:', error);
+        return null;
+      }
+      console.warn('SecureStore not available:', error);
+      return null;
     }
   },
 
@@ -32,10 +36,9 @@ export const secureStorage = {
     try {
       await SecureStore.deleteItemAsync(key);
     } catch (error) {
-      // Fallback to AsyncStorage if SecureStore fails
-      console.warn('SecureStore not available, using AsyncStorage:', error);
-      await AsyncStorage.removeItem(key);
+      if (SENSITIVE_KEYS.has(key)) {
+        console.error('SecureStore delete failed for sensitive key:', error);
+      }
     }
   },
 };
-

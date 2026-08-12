@@ -1,13 +1,18 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiService, { type UserResponse, type DiagnosisResponse, type SpectroscopyResponse } from '@/services/api';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus';
+import { initDB, setProfileDB, setChatHistoryDB, setDiagnosisHistoryDB, setSpectroscopyHistoryDB, getProfileDB, getChatHistoryDB, getDiagnosisHistoryDB, getSpectroscopyHistoryDB, getPendingDiagnosesDB } from '@/services/database';
+import syncService from '@/services/SyncService';
+import { sanitizeStateForStorage } from '@/utils/historyStorage';
+import type { AiToolSession } from '@/types/aiToolSession';
 
 export const SUPPORTED_LANGUAGES = [
   'English',
   'Luganda',
   'Ateso',
+  'Acholi',
   'Japadhola',
-  'Swahili',
   'Runyankore',
 ] as const;
 
@@ -26,6 +31,8 @@ export type FarmerProfile = {
   gpsLocation?: Coordinates;
   cropsGrown: string[];
   preferredLanguage: LanguageOption;
+  /** False for thin website signups until farm details are filled on mobile */
+  profileComplete?: boolean;
   createdAt: string;
   updatedAt?: string;
 };
@@ -50,6 +57,7 @@ export type DiagnosisRecord = {
   followUpQuestion?: string;
   followUpResponse?: string;
   timestamp: string;
+  syncStatus?: number; // 0 = synced, 1 = pending
 };
 
 export type SpectroscopyRecord = {
@@ -102,11 +110,11 @@ type AppContextValue = {
   state: AppState;
   isHydrated: boolean;
   isLoading: boolean;
+  isOffline: boolean;
   // Registration & Authentication
   completeRegistration: (profile: FarmerProfile) => void;
   registerWithAPI: (userData: { name: string; phone_number: string; password: string; area: string; preferred_language?: string; crops_grown?: string[]; gps_location?: Coordinates }) => Promise<boolean>;
-  authenticate: (phoneNumber: string) => boolean;
-  loginWithAPI: (phoneNumber: string, password?: string) => Promise<boolean>;
+  loginWithAPI: (phoneNumber: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   // Profile
   updateProfile: (updates: Partial<FarmerProfile>) => void;
@@ -115,6 +123,10 @@ type AppContextValue = {
   // Chat (local only for now)
   addChatMessages: (messages: NewChatMessage[]) => void;
   clearChatHistory: () => void;
+  /** Ephemeral tool-result context for AgriSense AI (not persisted) */
+  activeAiSession: AiToolSession | null;
+  setActiveAiSession: (session: AiToolSession | null) => void;
+  clearActiveAiSession: () => void;
   // Diagnosis
   addDiagnosisRecord: (record: NewDiagnosisRecord) => void;
   createDiagnosisWithAPI: (diagnosis: Omit<DiagnosisRecord, 'id' | 'timestamp'>) => Promise<DiagnosisRecord | null>;
@@ -130,12 +142,17 @@ type AppContextValue = {
   removeSpectroscopyRecord: (id: string) => void;
   removeSpectroscopyRecordWithAPI: (id: string) => Promise<boolean>;
   // History
+  syncHistoryFromAPI: () => Promise<boolean>;
+  isSyncingHistory: boolean;
+  lastHistorySyncAt: number | null;
   loadHistoryStats: () => Promise<void>;
   // Reset
   resetAll: () => void;
 };
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
+
+const useAppValue = (value: AppContextValue) => value;
 
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -147,12 +164,30 @@ export const AppProvider = ({ children }: Props) => {
   const [state, setState] = useState<AppState>(baseState);
   const [isHydrated, setIsHydrated] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSyncingHistory, setIsSyncingHistory] = useState(false);
+  const [lastHistorySyncAt, setLastHistorySyncAt] = useState<number | null>(null);
+  const [activeAiSession, setActiveAiSessionState] = useState<AiToolSession | null>(null);
+  const historySyncInFlight = useRef(false);
+  const networkStatus = useNetworkStatus();
+  const isOffline = networkStatus.isConnected === false;
 
   // Define persist and updateState first, as they're used by other functions
   const persist = useCallback((next: AppState) => {
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch((error) =>
-      console.warn('Failed to persist application state', error),
+    const storable = sanitizeStateForStorage(next);
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storable)).catch((error) =>
+      console.warn('Failed to persist application state to AsyncStorage', error),
     );
+    const saveToSQLite = async () => {
+      try {
+        await setProfileDB(storable.profile);
+        await setChatHistoryDB(storable.chatHistory);
+        await setDiagnosisHistoryDB(storable.diagnosisHistory);
+        await setSpectroscopyHistoryDB(storable.spectroscopyHistory);
+      } catch (e) {
+        console.warn('Failed to persist to SQLite', e);
+      }
+    };
+    saveToSQLite();
   }, []);
 
   const updateState = useCallback(
@@ -185,10 +220,11 @@ export const AppProvider = ({ children }: Props) => {
         gpsLocation: response.gps_latitude && response.gps_longitude
           ? { latitude: response.gps_latitude, longitude: response.gps_longitude }
           : undefined,
+        profileComplete: response.profile_complete,
         createdAt: response.created_at,
         updatedAt: response.updated_at,
       };
-      
+
       updateState((prev) => ({
         ...prev,
         profile,
@@ -204,32 +240,78 @@ export const AppProvider = ({ children }: Props) => {
   useEffect(() => {
     const hydrate = async () => {
       try {
+        await initDB();
+        
+        // Try loading from SQLite first sequentially
+        const dbProfile = await getProfileDB();
+        const dbChats = await getChatHistoryDB();
+        const dbDiagnoses = await getDiagnosisHistoryDB();
+        const dbSpectroscopy = await getSpectroscopyHistoryDB();
+        
         let parsed: AppState | null = null;
-        const stored = await AsyncStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          parsed = JSON.parse(stored) as AppState;
+        
+        // If we found data in SQLite, use it
+        if (dbProfile || dbChats.length > 0 || dbDiagnoses.length > 0 || dbSpectroscopy.length > 0) {
+          console.log('✅ Hydrating state from SQLite database');
           setState((prev) => ({
             ...prev,
-            ...parsed,
-            chatHistory: parsed.chatHistory ?? [],
-            diagnosisHistory: parsed.diagnosisHistory ?? [],
-            spectroscopyHistory: parsed.spectroscopyHistory ?? [],
-            createdAt: parsed.createdAt ?? prev.createdAt,
+            profile: dbProfile || prev.profile,
+            chatHistory: dbChats,
+            diagnosisHistory: dbDiagnoses,
+            spectroscopyHistory: dbSpectroscopy,
           }));
+        } else {
+          // Fallback to AsyncStorage
+          const stored = await AsyncStorage.getItem(STORAGE_KEY);
+          if (stored) {
+            parsed = JSON.parse(stored) as AppState;
+            if (parsed) {
+              console.log('✅ Hydrating state from AsyncStorage (migrating to SQLite)');
+              setState((prev) => ({
+                ...prev,
+                ...parsed,
+                chatHistory: parsed?.chatHistory ?? [],
+                diagnosisHistory: parsed?.diagnosisHistory ?? [],
+                spectroscopyHistory: parsed?.spectroscopyHistory ?? [],
+                createdAt: parsed?.createdAt ?? prev.createdAt,
+              }));
+              // Migrate data to SQLite exactly once
+              const migrateToSQLite = async () => {
+                try {
+                  await setProfileDB(parsed!.profile);
+                  await setChatHistoryDB(parsed!.chatHistory);
+                  await setDiagnosisHistoryDB(parsed!.diagnosisHistory);
+                  await setSpectroscopyHistoryDB(parsed!.spectroscopyHistory);
+                } catch (e) {
+                  console.warn('Fast migration catch', e);
+                }
+              };
+              migrateToSQLite();
+            }
+          }
         }
-        
+
         // Check if user has a valid token and restore authentication
         // This ensures users stay logged in when they reopen the app
         const token = await apiService.getToken();
+        const cachedProfile = dbProfile || parsed?.profile;
+
         if (token) {
           console.log('🔐 Token found on startup, restoring authentication...');
-          // If we have a token, try to load profile to verify it's still valid
+          // Trust cached session immediately so we skip landing → home without waiting on /me
+          if (cachedProfile) {
+            setState((prev) => ({
+              ...prev,
+              profile: cachedProfile,
+              isAuthenticated: true,
+            }));
+          }
+
           try {
             await loadUserProfile();
             console.log('✅ Authentication restored successfully');
           } catch (error: any) {
             console.warn('⚠️ Failed to restore authentication:', error.message);
-            // If token is invalid (401), clear it and mark as unauthenticated
             if (error?.response?.status === 401) {
               console.log('🔐 Token is invalid, clearing...');
               await apiService.removeToken();
@@ -238,10 +320,16 @@ export const AppProvider = ({ children }: Props) => {
                 isAuthenticated: false,
                 profile: undefined,
               }));
+            } else if (cachedProfile) {
+              // Offline / server wake-up: keep session with cached profile
+              console.warn('⚠️ Could not verify token online; keeping cached session');
+              setState((prev) => ({
+                ...prev,
+                profile: cachedProfile,
+                isAuthenticated: true,
+              }));
             } else {
-              // For other errors (network, etc.), keep the token but don't set authenticated
-              // User can try again later
-              console.warn('⚠️ Could not verify token, but keeping it for retry');
+              console.warn('⚠️ Could not verify token and no cached profile');
             }
           }
         } else {
@@ -253,15 +341,36 @@ export const AppProvider = ({ children }: Props) => {
             profile: undefined,
           }));
         }
-      } catch (error) {
-        console.warn('Failed to restore application state', error);
+      } catch (error: any) {
+        console.error('❌ Error during hydration:', error);
       } finally {
         setIsHydrated(true);
       }
     };
-
     hydrate();
-  }, [loadUserProfile]);
+  }, [loadUserProfile, updateState]);
+
+  // Network Recovery Synchronization
+  useEffect(() => {
+    if (!isOffline && isHydrated && state.isAuthenticated) {
+      const runSync = async () => {
+        console.log('🌐 Network restored, checking for pending syncs...');
+        try {
+          await syncService.syncPendingDiagnoses((syncedRecord) => {
+            updateState((prev) => ({
+              ...prev,
+              diagnosisHistory: prev.diagnosisHistory.map((rec) =>
+                rec.id === syncedRecord.id ? { ...rec, syncStatus: 0 } : rec
+              ),
+            }));
+          });
+        } catch (e) {
+          console.warn('Sync failed:', e);
+        }
+      };
+      runSync();
+    }
+  }, [isOffline, isHydrated, state.isAuthenticated, updateState]);
 
   const completeRegistration = useCallback(
     (profile: FarmerProfile) => {
@@ -272,23 +381,6 @@ export const AppProvider = ({ children }: Props) => {
       }));
     },
     [updateState],
-  );
-
-  const authenticate = useCallback(
-    (phoneNumber: string) => {
-      if (!state.profile) {
-        return false;
-      }
-      const matches = state.profile.phoneNumber.trim() === phoneNumber.trim();
-      if (matches) {
-        updateState((prev) => ({
-          ...prev,
-          isAuthenticated: true,
-        }));
-      }
-      return matches;
-    },
-    [state.profile, updateState],
   );
 
 
@@ -316,28 +408,28 @@ export const AppProvider = ({ children }: Props) => {
       }
       updateState((prev) => {
         const newMessages = messages.map((message) => ({
+          ...message,
           id: message.id ?? createId(),
           timestamp: message.timestamp ?? new Date().toISOString(),
-          ...message,
         }));
-        
+
         // Replace existing messages with same ID, add new ones
         // Use a Map for O(1) lookup and to ensure no duplicates
         const messageMap = new Map<string, ChatMessage>();
-        
+
         // First, add all existing messages
         prev.chatHistory.forEach((msg) => {
           messageMap.set(msg.id, msg);
         });
-        
+
         // Then, add/update with new messages (new messages override existing ones with same ID)
         newMessages.forEach((newMsg) => {
           messageMap.set(newMsg.id, newMsg);
         });
-        
+
         // Convert back to array
         const updatedHistory = Array.from(messageMap.values());
-        
+
         return {
           ...prev,
           chatHistory: updatedHistory,
@@ -354,15 +446,23 @@ export const AppProvider = ({ children }: Props) => {
     }));
   }, [updateState]);
 
+  const setActiveAiSession = useCallback((session: AiToolSession | null) => {
+    setActiveAiSessionState(session);
+  }, []);
+
+  const clearActiveAiSession = useCallback(() => {
+    setActiveAiSessionState(null);
+  }, []);
+
   const addDiagnosisRecord = useCallback(
     (record: NewDiagnosisRecord) => {
       updateState((prev) => ({
         ...prev,
         diagnosisHistory: [
           {
+            ...record,
             id: record.id ?? createId(),
             timestamp: record.timestamp ?? new Date().toISOString(),
-            ...record,
           },
           ...prev.diagnosisHistory,
         ],
@@ -399,9 +499,9 @@ export const AppProvider = ({ children }: Props) => {
         ...prev,
         spectroscopyHistory: [
           {
+            ...record,
             id: record.id ?? createId(),
             timestamp: record.timestamp ?? new Date().toISOString(),
-            ...record,
           },
           ...prev.spectroscopyHistory,
         ],
@@ -433,6 +533,51 @@ export const AppProvider = ({ children }: Props) => {
   }, [updateState]);
 
   // API Integration Methods
+  const loginWithAPI = useCallback(async (phoneNumber: string, password: string): Promise<boolean> => {
+    if (!password?.trim()) {
+      throw new Error('Password is required');
+    }
+    try {
+      setIsLoading(true);
+      if (__DEV__) {
+        console.log('Logging in with phone number (length):', phoneNumber.length);
+      }
+      await apiService.login({ identifier: phoneNumber, password });
+
+      updateState((prev) => ({
+        ...prev,
+        isAuthenticated: true,
+      }));
+
+      // Load profile in background — don't block the login success UI
+      loadUserProfile().catch((profileError: any) => {
+        if (__DEV__) {
+          console.warn('⚠️ Failed to load profile after login:', profileError.message);
+        }
+      });
+
+      return true;
+    } catch (error: any) {
+      if (error.response?.status >= 400 && error.response?.status < 500) {
+        console.warn('Login validation warning:', error.response?.data?.detail || error.message);
+      } else {
+        console.error('❌ Login failed:', error.message);
+      }
+
+      // Provide more helpful error information
+      if (error.response?.status === 404) {
+        console.log('💡 Tip: The login endpoint returned 404. This might mean the user doesn\'t exist or the endpoint path is incorrect.');
+      } else if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
+        console.warn('💡 Tip: Backend may be waking up (Render.com free tier) or unreachable. Please wait 30-60 seconds and try again.');
+      }
+
+      // Rethrow to let the component handle the error message
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [loadUserProfile, updateState]);
+
   const registerWithAPI = useCallback(async (userData: {
     name: string;
     phone_number: string;
@@ -445,89 +590,28 @@ export const AppProvider = ({ children }: Props) => {
     try {
       setIsLoading(true);
       const response = await apiService.register(userData);
-      
-      // Convert API response to FarmerProfile
-      const profile: FarmerProfile = {
-        id: response.id,
-        name: response.name,
-        phoneNumber: response.phone_number,
-        area: response.area,
-        preferredLanguage: (response.preferred_language as LanguageOption) || 'English',
-        cropsGrown: response.crops_grown || [],
-        gpsLocation: response.gps_latitude && response.gps_longitude
-          ? { latitude: response.gps_latitude, longitude: response.gps_longitude }
-          : undefined,
-        createdAt: response.created_at,
-        updatedAt: response.updated_at,
-      };
-      
-      completeRegistration(profile);
-      return true;
-    } catch (error: any) {
-      console.error('Registration failed:', error);
-      // Error handling is done in the component with sweet alerts
-      return false;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [completeRegistration]);
+      console.log('✅ Registration successful for:', response.phone_number);
 
-  const loginWithAPI = useCallback(async (phoneNumber: string, password?: string): Promise<boolean> => {
-    try {
-      setIsLoading(true);
-      if (__DEV__) {
-        console.log('Logging in with phone number (length):', phoneNumber.length);
-      }
-      const tokenResponse = await apiService.login({ phone_number: phoneNumber, password });
-      if (__DEV__) {
-        console.log('Login successful, token received:', !!tokenResponse.access_token);
-      }
-      
-      // Verify token was saved
-      const savedToken = await apiService.getToken();
-      if (savedToken) {
-        if (__DEV__) {
-          console.log('✅ Token successfully saved to storage');
-        }
-      } else {
-        if (__DEV__) {
-          console.error('❌ WARNING: Token was not saved to storage!');
-        }
-      }
-      
-      // Load user profile after login
-      // Don't fail login if profile loading fails - user is already authenticated
       try {
-        await loadUserProfile();
-        console.log('✅ User profile loaded after login');
-      } catch (profileError: any) {
-        console.warn('⚠️ Failed to load profile after login, but login was successful:', profileError.message);
-        // User is still authenticated (token is saved), profile can be loaded later
-        // Set authenticated state even if profile load fails
-        updateState((prev) => ({
-          ...prev,
-          isAuthenticated: true,
-        }));
+        console.log('🔄 Performing automated login after registration...');
+        await loginWithAPI(userData.phone_number, userData.password);
+        console.log('✅ Automated login successful');
+        return true;
+      } catch (loginError: any) {
+        console.warn('⚠️ Register succeeded but auto-login failed:', loginError.message);
+        return false;
       }
-      
-      return true;
     } catch (error: any) {
-      console.error('❌ Login failed:', error);
-      console.error('   Error message:', error.message);
-      console.error('   Error code:', error.code);
-      console.error('   Error response:', error.response?.status, error.response?.data);
-      
-      // Provide more helpful error information
-      if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
-        console.error('   💡 Tip: Backend may be waking up (Render.com free tier). Please wait 30-60 seconds and try again.');
+      if (error.response?.status >= 400 && error.response?.status < 500) {
+        console.warn('Registration validation warning:', error.response?.data?.detail || error.message);
+      } else {
+        console.error('Registration failed:', error.message);
       }
-      
-      // Error handling is done in the component with sweet alerts
-      return false;
+      throw error;
     } finally {
       setIsLoading(false);
     }
-  }, [loadUserProfile, updateState]);
+  }, [loginWithAPI]);
 
   const updateProfileWithAPI = useCallback(async (updates: Partial<FarmerProfile>): Promise<boolean> => {
     try {
@@ -543,9 +627,14 @@ export const AppProvider = ({ children }: Props) => {
           longitude: updates.gpsLocation.longitude,
         };
       }
-      
+      // Completing farm details from mobile clears the website thin-signup flag
+      if (updates.area || updates.cropsGrown) {
+        apiUpdates.profile_complete = true;
+      }
+
       const response = await apiService.updateProfile(apiUpdates);
       const profile: FarmerProfile = {
+        id: response.id,
         name: response.name,
         phoneNumber: response.phone_number,
         area: response.area,
@@ -554,10 +643,11 @@ export const AppProvider = ({ children }: Props) => {
         gpsLocation: response.gps_latitude && response.gps_longitude
           ? { latitude: response.gps_latitude, longitude: response.gps_longitude }
           : undefined,
+        profileComplete: response.profile_complete ?? true,
         createdAt: response.created_at,
         updatedAt: response.updated_at,
       };
-      
+
       updateState((prev) => ({
         ...prev,
         profile,
@@ -575,6 +665,26 @@ export const AppProvider = ({ children }: Props) => {
   const createDiagnosisWithAPI = useCallback(async (diagnosis: Omit<DiagnosisRecord, 'id' | 'timestamp'>): Promise<DiagnosisRecord | null> => {
     try {
       setIsLoading(true);
+
+      // If offline, we save the diagnosis locally as "Pending" and return it
+      if (isOffline) {
+        console.log('📴 Offline: Queuing diagnosis record locally for future sync');
+        const offlineRecord: DiagnosisRecord = {
+          ...diagnosis,
+          id: createId(),
+          timestamp: new Date().toISOString(),
+          syncStatus: 1, // Pending
+        };
+
+        updateState((prev) => ({
+          ...prev,
+          diagnosisHistory: [offlineRecord, ...prev.diagnosisHistory],
+        }));
+
+        return offlineRecord;
+      }
+
+      // If online, proceed with standard API call
       const response = await apiService.createDiagnosis({
         image_uri: diagnosis.imageUri,
         suspected_issues: diagnosis.suspectedIssues,
@@ -583,8 +693,9 @@ export const AppProvider = ({ children }: Props) => {
         recommendations: diagnosis.recommendations,
         follow_up_question: diagnosis.followUpQuestion,
         follow_up_response: diagnosis.followUpResponse,
+        target_lang: state.profile?.preferredLanguage,
       });
-      
+
       const record: DiagnosisRecord = {
         id: response.id,
         imageUri: response.image_uri,
@@ -596,7 +707,7 @@ export const AppProvider = ({ children }: Props) => {
         followUpResponse: response.follow_up_response,
         timestamp: response.timestamp,
       };
-      
+
       addDiagnosisRecord(record);
       return record;
     } catch (error: any) {
@@ -610,6 +721,11 @@ export const AppProvider = ({ children }: Props) => {
 
   const loadDiagnosisHistory = useCallback(async () => {
     try {
+      if (isOffline) {
+        console.log('📶 App is offline. Skipping diagnosis history API load.');
+        return;
+      }
+
       // Check if user has a token before making API call
       const token = await apiService.getToken();
       if (!token) {
@@ -620,10 +736,9 @@ export const AppProvider = ({ children }: Props) => {
       console.log('📥 Loading diagnosis history from API...');
       const records = await apiService.getDiagnosisHistory({ limit: 100, sort: 'newest' });
       console.log(`✅ Loaded ${records.length} diagnosis records from API`);
-      const diagnosisHistory: (DiagnosisRecord & { image_base64?: string })[] = records.map((r) => ({
+      const diagnosisHistory: DiagnosisRecord[] = records.map((r) => ({
         id: r.id,
         imageUri: r.image_uri,
-        image_base64: r.image_base64, // Include base64 image from API
         suspectedIssues: r.suspected_issues,
         confidence: r.confidence,
         summary: r.summary,
@@ -632,7 +747,7 @@ export const AppProvider = ({ children }: Props) => {
         followUpResponse: r.follow_up_response,
         timestamp: r.timestamp,
       }));
-      
+
       updateState((prev) => ({
         ...prev,
         diagnosisHistory,
@@ -642,7 +757,7 @@ export const AppProvider = ({ children }: Props) => {
       console.error('   Error status:', error?.response?.status);
       console.error('   Error message:', error?.message);
       const status = error?.response?.status;
-      
+
       // Handle different error statuses
       if (status === 401) {
         // Unauthorized - clear token and mark as unauthenticated
@@ -652,15 +767,12 @@ export const AppProvider = ({ children }: Props) => {
           isAuthenticated: false,
         }));
       } else if (status === 500) {
-        // Server error - log but don't show error to user, continue with local data
         console.warn('Server error loading diagnosis history. Using local data only.');
-      } else {
-        // Other errors - log but continue with local data
-        console.warn('Error loading diagnosis history. Using local data only.');
+        return;
       }
-      // Don't throw error - allow app to continue with local data
+      throw error;
     }
-  }, [updateState]);
+  }, [updateState, isOffline]);
 
   const removeDiagnosisRecordWithAPI = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -711,7 +823,7 @@ export const AppProvider = ({ children }: Props) => {
         summary: spectroscopy.summary,
         insights: spectroscopy.insights,
       });
-      
+
       const record: SpectroscopyRecord = {
         id: response.id,
         sampleName: response.sample_name,
@@ -720,7 +832,7 @@ export const AppProvider = ({ children }: Props) => {
         insights: response.insights,
         timestamp: response.timestamp,
       };
-      
+
       addSpectroscopyRecord(record);
       return record;
     } catch (error: any) {
@@ -734,6 +846,11 @@ export const AppProvider = ({ children }: Props) => {
 
   const loadSpectroscopyHistory = useCallback(async () => {
     try {
+      if (isOffline) {
+        console.log('📶 App is offline. Skipping spectroscopy history API load.');
+        return;
+      }
+
       // Check if user has a token before making API call
       const token = await apiService.getToken();
       if (!token) {
@@ -752,7 +869,7 @@ export const AppProvider = ({ children }: Props) => {
         insights: r.insights,
         timestamp: r.timestamp,
       }));
-      
+
       updateState((prev) => ({
         ...prev,
         spectroscopyHistory,
@@ -762,7 +879,7 @@ export const AppProvider = ({ children }: Props) => {
       console.error('   Error status:', error?.response?.status);
       console.error('   Error message:', error?.message);
       const status = error?.response?.status;
-      
+
       // Handle different error statuses
       if (status === 401) {
         // Unauthorized - clear token and mark as unauthenticated
@@ -772,15 +889,50 @@ export const AppProvider = ({ children }: Props) => {
           isAuthenticated: false,
         }));
       } else if (status === 500) {
-        // Server error - log but don't show error to user, continue with local data
         console.warn('Server error loading spectroscopy history. Using local data only.');
-      } else {
-        // Other errors - log but continue with local data
-        console.warn('Error loading spectroscopy history. Using local data only.');
+        return;
       }
-      // Don't throw error - allow app to continue with local data
+      throw error;
     }
-  }, [updateState]);
+  }, [updateState, isOffline]);
+
+  const syncHistoryFromAPI = useCallback(async (): Promise<boolean> => {
+    if (isOffline || historySyncInFlight.current) {
+      return false;
+    }
+
+    const token = await apiService.getToken();
+    if (!token) {
+      return false;
+    }
+
+    historySyncInFlight.current = true;
+    setIsSyncingHistory(true);
+
+    try {
+      const results = await Promise.allSettled([
+        loadDiagnosisHistory(),
+        loadSpectroscopyHistory(),
+      ]);
+
+      const hasFailure = results.some((result) => result.status === 'rejected');
+      if (!hasFailure) {
+        setLastHistorySyncAt(Date.now());
+        return true;
+      }
+      return false;
+    } finally {
+      historySyncInFlight.current = false;
+      setIsSyncingHistory(false);
+    }
+  }, [isOffline, loadDiagnosisHistory, loadSpectroscopyHistory]);
+
+  useEffect(() => {
+    if (!isHydrated || !state.isAuthenticated || isOffline) {
+      return;
+    }
+    syncHistoryFromAPI();
+  }, [isHydrated, state.isAuthenticated, isOffline, syncHistoryFromAPI]);
 
   const removeSpectroscopyRecordWithAPI = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -835,6 +987,7 @@ export const AppProvider = ({ children }: Props) => {
     console.log('Logging out...');
     // Remove token first
     await apiService.removeToken();
+    setActiveAiSessionState(null);
     // Clear authentication state
     updateState((prev) => ({
       ...prev,
@@ -856,6 +1009,7 @@ export const AppProvider = ({ children }: Props) => {
     };
     setState(resetState);
     persist(resetState);
+    setActiveAiSessionState(null);
     apiService.removeToken();
   }, [persist]);
 
@@ -864,9 +1018,9 @@ export const AppProvider = ({ children }: Props) => {
       state,
       isHydrated,
       isLoading,
+      isOffline,
       completeRegistration,
       registerWithAPI,
-      authenticate,
       loginWithAPI,
       logout,
       updateProfile,
@@ -874,6 +1028,9 @@ export const AppProvider = ({ children }: Props) => {
       loadUserProfile,
       addChatMessages,
       clearChatHistory,
+      activeAiSession,
+      setActiveAiSession,
+      clearActiveAiSession,
       addDiagnosisRecord,
       createDiagnosisWithAPI,
       loadDiagnosisHistory,
@@ -886,6 +1043,9 @@ export const AppProvider = ({ children }: Props) => {
       clearSpectroscopyHistory,
       removeSpectroscopyRecord,
       removeSpectroscopyRecordWithAPI,
+      syncHistoryFromAPI,
+      isSyncingHistory,
+      lastHistorySyncAt,
       loadHistoryStats,
       resetAll,
     }),
@@ -893,9 +1053,12 @@ export const AppProvider = ({ children }: Props) => {
       state,
       isHydrated,
       isLoading,
+      isOffline,
+      isSyncingHistory,
+      lastHistorySyncAt,
+      activeAiSession,
       completeRegistration,
       registerWithAPI,
-      authenticate,
       loginWithAPI,
       logout,
       updateProfile,
@@ -903,6 +1066,8 @@ export const AppProvider = ({ children }: Props) => {
       loadUserProfile,
       addChatMessages,
       clearChatHistory,
+      setActiveAiSession,
+      clearActiveAiSession,
       addDiagnosisRecord,
       createDiagnosisWithAPI,
       loadDiagnosisHistory,
@@ -915,6 +1080,7 @@ export const AppProvider = ({ children }: Props) => {
       clearSpectroscopyHistory,
       removeSpectroscopyRecord,
       removeSpectroscopyRecordWithAPI,
+      syncHistoryFromAPI,
       loadHistoryStats,
       resetAll,
     ],
