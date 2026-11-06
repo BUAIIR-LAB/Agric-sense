@@ -80,6 +80,7 @@ export default function HistoryDetailScreen() {
   const [isLoadingAdvisory, setIsLoadingAdvisory] = useState(false);
   const [advisoryConversationId, setAdvisoryConversationId] = useState<string | null>(null);
   const [advisoryPrompt, setAdvisoryPrompt] = useState<string | null>(null);
+  const [chartContainerWidth, setChartContainerWidth] = useState(0);
 
   const recordType = type === 'diagnosis' || type === 'spectroscopy' ? type : null;
   const [record, setRecord] = useState<DiagnosisRecord | SpectroscopyRecord | null>(null);
@@ -289,6 +290,44 @@ Please provide practical, actionable advice that I can implement immediately. Us
 
   const { showAlert } = useSweetAlert();
 
+  const spectroscopyDataset = useMemo(() => {
+    if (recordType !== 'spectroscopy' || !record || !('spectrum' in record)) return null;
+    const points = record.spectrum;
+    if (!points.length) return null;
+
+    // Downsample dense spectral traces so chart-kit labels/layout stay in the card
+    const maxPoints = 48;
+    const step = Math.max(1, Math.ceil(points.length / maxPoints));
+    const sampled = points.filter((_, i) => i % step === 0 || i === points.length - 1);
+    const labelEvery = Math.max(1, Math.floor(sampled.length / 4));
+
+    return {
+      labels: sampled.map((point, i) =>
+        i % labelEvery === 0 || i === sampled.length - 1
+          ? String(Math.round(point.wavelength))
+          : '',
+      ),
+      datasets: [
+        {
+          data: sampled.map((point) => point.intensity),
+          strokeWidth: 2,
+          color: (opacity = 1) => `rgba(46,125,50,${opacity})`,
+        },
+      ],
+    };
+  }, [recordType, record]);
+
+  // Fit chart inside contentCard + detailCard padding (each uses spacing.xl)
+  const chartWidth = Math.max(
+    200,
+    chartContainerWidth > 0
+      ? chartContainerWidth
+      : Math.min(width - spacing.xl * 4 - 8, 480),
+  );
+  const chartHeight = Math.min(220, Math.max(160, chartWidth * 0.42));
+  const diagRecord = recordType === 'diagnosis' ? (record as DiagnosisRecord) : null;
+  const spectroRecord = recordType === 'spectroscopy' ? (record as SpectroscopyRecord) : null;
+
   const handleDelete = async () => {
     if (!recordType || !record) {
       return;
@@ -346,6 +385,10 @@ Please provide practical, actionable advice that I can implement immediately. Us
     );
   };
 
+  if (!isReady) {
+    return null;
+  }
+
   if (isLoadingRecord) {
     return (
       <View style={[styles.emptyState, { paddingTop: insets.top + spacing.xl }]}>
@@ -372,27 +415,6 @@ Please provide practical, actionable advice that I can implement immediately. Us
         </Pressable>
       </View>
     );
-  }
-
-  const spectroscopyDataset =
-    recordType === 'spectroscopy' && record && 'spectrum' in record
-      ? {
-        labels: record.spectrum.map((point) => point.wavelength.toString()),
-        datasets: [
-          {
-            data: record.spectrum.map((point) => point.intensity),
-            strokeWidth: 2,
-          },
-        ],
-      }
-      : null;
-  const chartWidth = Math.min(width - spacing.xl * 2, 520);
-  const chartHeight = Math.min(280, Math.max(200, chartWidth * 0.45));
-  const diagRecord = recordType === 'diagnosis' ? (record as DiagnosisRecord) : null;
-  const spectroRecord = recordType === 'spectroscopy' ? (record as SpectroscopyRecord) : null;
-
-  if (!isReady) {
-    return null;
   }
 
   return (
@@ -613,28 +635,46 @@ Please provide practical, actionable advice that I can implement immediately. Us
             {spectroscopyDataset && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>{t('historyDetail.spectralTrace')}</Text>
-                <LineChart
-                  data={spectroscopyDataset}
-                  width={chartWidth}
-                  height={chartHeight}
-                  withDots={false}
-                  withInnerLines
-                  chartConfig={{
-                    backgroundColor: 'transparent',
-                    backgroundGradientFrom: palette.white,
-                    backgroundGradientFromOpacity: 0,
-                    backgroundGradientTo: palette.white,
-                    backgroundGradientToOpacity: 0,
-                    color: (opacity = 1) => `rgba(46,125,50,${opacity})`,
-                    strokeWidth: 2,
-                    propsForBackgroundLines: {
-                      strokeDasharray: '4 8',
-                      stroke: 'rgba(46,125,50,0.25)',
-                    },
+                <View
+                  style={styles.chartWrap}
+                  onLayout={(e) => {
+                    const next = Math.floor(e.nativeEvent.layout.width);
+                    if (next > 0 && next !== chartContainerWidth) {
+                      setChartContainerWidth(next);
+                    }
                   }}
-                  bezier
-                  style={styles.chart}
-                />
+                >
+                  {chartWidth > 0 ? (
+                    <LineChart
+                      data={spectroscopyDataset}
+                      width={chartWidth}
+                      height={chartHeight}
+                      withDots={false}
+                      withInnerLines
+                      withOuterLines={false}
+                      fromZero
+                      chartConfig={{
+                        backgroundColor: palette.white,
+                        backgroundGradientFrom: palette.white,
+                        backgroundGradientFromOpacity: 1,
+                        backgroundGradientTo: palette.white,
+                        backgroundGradientToOpacity: 1,
+                        color: (opacity = 1) => `rgba(46,125,50,${opacity})`,
+                        labelColor: (opacity = 1) => `rgba(66,66,66,${opacity})`,
+                        strokeWidth: 2,
+                        propsForBackgroundLines: {
+                          strokeDasharray: '4 8',
+                          stroke: 'rgba(46,125,50,0.2)',
+                        },
+                        propsForLabels: {
+                          fontSize: 10,
+                        },
+                      }}
+                      bezier
+                      style={styles.chart}
+                    />
+                  ) : null}
+                </View>
               </View>
             )}
             <View style={styles.section}>
@@ -846,9 +886,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: palette.gray500,
   },
+  chartWrap: {
+    width: '100%',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#E1EAE4',
+    backgroundColor: palette.white,
+    overflow: 'hidden',
+    marginTop: spacing.sm,
+  },
   chart: {
     borderRadius: radius.lg,
-    marginTop: spacing.sm,
+    marginVertical: 0,
+    marginLeft: 0,
+    paddingRight: 0,
   },
   chipInconclusive: {
     backgroundColor: palette.gray100,

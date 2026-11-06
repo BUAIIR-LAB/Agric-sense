@@ -68,6 +68,28 @@ const CATEGORY_COLORS: Record<string, string> = {
   Tools: '#ECEFF1',
 };
 
+const FALLBACK_CATEGORIES_PRODUCE = ['Grains', 'Roots', 'Legumes', 'Crops', 'Livestock'];
+const FALLBACK_CATEGORIES_INPUTS = ['Fertilizer', 'Seeds', 'Tools'];
+
+function normalizeCategory(raw: string): string {
+  const trimmed = raw.trim().replace(/\s+/g, ' ');
+  if (!trimmed || trimmed.length > 28) return '';
+  return trimmed;
+}
+
+function ProductSkeleton() {
+  return (
+    <View style={styles.card}>
+      <View style={[styles.imageArea, styles.skeletonBlock]} />
+      <View style={styles.cardBody}>
+        <View style={[styles.skeletonLine, { width: '90%' }]} />
+        <View style={[styles.skeletonLine, { width: '55%', marginTop: 8 }]} />
+        <View style={[styles.skeletonLine, { width: '40%', marginTop: 10, height: 14 }]} />
+      </View>
+    </View>
+  );
+}
+
 const PRODUCE: Listing[] = [
   {
     id: 'p1',
@@ -407,7 +429,7 @@ function mapApiProduct(p: Record<string, unknown>): Listing {
   return {
     id: String(p.id),
     title: String(p.title ?? ''),
-    category: String(p.category ?? ''),
+    category: normalizeCategory(String(p.category ?? '')) || 'Other',
     price: price.toLocaleString(),
     unit: String(p.unit ?? 'kg'),
     location: String(p.location ?? ''),
@@ -503,10 +525,17 @@ export default function MarketplaceScreen() {
   }, [loadCatalog]);
 
   const catalog = mode === 'sell' ? apiProduce : apiInputs;
-  const categories = useMemo(
-    () => Array.from(new Set(catalog.map((c) => c.category))),
-    [catalog],
-  );
+  const categories = useMemo(() => {
+    const fromCatalog = Array.from(
+      new Set(
+        catalog
+          .map((c) => normalizeCategory(c.category))
+          .filter(Boolean),
+      ),
+    );
+    if (fromCatalog.length > 0) return fromCatalog;
+    return mode === 'sell' ? FALLBACK_CATEGORIES_PRODUCE : FALLBACK_CATEGORIES_INPUTS;
+  }, [catalog, mode]);
   const data = useMemo(
     () => (mode === 'sell' ? [...myListings, ...catalog] : catalog),
     [mode, myListings, catalog],
@@ -661,105 +690,153 @@ export default function MarketplaceScreen() {
         </View>
       </View>
 
-      <View style={styles.modeRow}>
-        {(['sell', 'buy'] as MarketMode[]).map((key) => {
-          const active = mode === key;
-          return (
+      <View style={styles.controls}>
+        <View style={styles.modeSegment}>
+          {(['sell', 'buy'] as MarketMode[]).map((key) => {
+            const active = mode === key;
+            return (
+              <Pressable
+                key={key}
+                onPress={() => {
+                  setMode(key);
+                  setCategory(null);
+                }}
+                style={[styles.modeSegmentItem, active && styles.modeSegmentItemActive]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={[styles.modeSegmentText, active && styles.modeSegmentTextActive]}>
+                  {key === 'sell' ? 'Sell' : 'Buy'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <View style={styles.searchRow}>
+          <MaterialCommunityIcons name="magnify" size={20} color={palette.text.tertiary} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder={mode === 'sell' ? 'Search produce…' : 'Search farm inputs…'}
+            placeholderTextColor={palette.text.tertiary}
+            value={query}
+            onChangeText={setQuery}
+          />
+          {query ? (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <MaterialCommunityIcons name="close-circle" size={18} color={palette.text.tertiary} />
+            </Pressable>
+          ) : null}
+        </View>
+
+        <View style={styles.categorySection}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryTextRow}
+          >
+            {(['All', ...categories] as string[]).map((c) => {
+              const value = c === 'All' ? null : c;
+              const active = category === value;
+              return (
+                <Pressable
+                  key={c}
+                  onPress={() => setCategory(value)}
+                  style={styles.categoryItem}
+                  hitSlop={{ top: 6, bottom: 6 }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text
+                    style={[styles.categoryText, active && styles.categoryTextActive]}
+                    numberOfLines={1}
+                  >
+                    {c}
+                  </Text>
+                  <View
+                    style={[
+                      styles.categoryIndicator,
+                      active && styles.categoryIndicatorActive,
+                    ]}
+                  />
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View style={styles.metaRow}>
+          <Text style={styles.metaCount}>
+            {catalogLoading ? 'Loading…' : `${filtered.length} listing${filtered.length === 1 ? '' : 's'}`}
+          </Text>
+          <View style={styles.metaActions}>
             <Pressable
-              key={key}
-              onPress={() => {
-                setMode(key);
-                setCategory(null);
-              }}
-              style={[styles.modeChip, active && styles.modeChipActive]}
+              onPress={() => setInStockOnly((v) => !v)}
+              style={styles.metaAction}
+              accessibilityRole="button"
+              accessibilityState={{ selected: inStockOnly }}
             >
-              <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>
-                {key === 'sell' ? 'Sell produce' : 'Buy inputs'}
+              <MaterialCommunityIcons
+                name={inStockOnly ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                size={16}
+                color={inStockOnly ? palette.brandGreen : palette.text.tertiary}
+              />
+              <Text style={[styles.metaActionText, inStockOnly && styles.metaActionTextOn]}>
+                In stock
               </Text>
             </Pressable>
-          );
-        })}
-      </View>
+            <Pressable
+              onPress={() => {
+                const order: SortKey[] = ['featured', 'price-asc', 'price-desc'];
+                const next = order[(order.indexOf(sort) + 1) % order.length];
+                setSort(next);
+              }}
+              style={styles.metaAction}
+              accessibilityRole="button"
+              accessibilityLabel="Change sort order"
+            >
+              <MaterialCommunityIcons name="swap-vertical" size={16} color={palette.text.secondary} />
+              <Text style={styles.metaActionText}>
+                {sort === 'featured' ? 'Featured' : sort === 'price-asc' ? 'Price ↑' : 'Price ↓'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
 
-      <View style={styles.searchRow}>
-        <MaterialCommunityIcons name="magnify" size={20} color={palette.text.tertiary} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder={mode === 'sell' ? 'Search produce…' : 'Search farm inputs…'}
-          placeholderTextColor={palette.text.tertiary}
-          value={query}
-          onChangeText={setQuery}
-        />
-        {query ? (
-          <Pressable onPress={() => setQuery('')} hitSlop={8}>
-            <MaterialCommunityIcons name="close-circle" size={18} color={palette.text.tertiary} />
+        {mode === 'sell' ? (
+          <Pressable style={styles.postBtn} onPress={() => setShowSellForm(true)}>
+            <MaterialCommunityIcons name="plus" size={18} color={palette.white} />
+            <Text style={styles.postBtnText}>Post a listing</Text>
           </Pressable>
         ) : null}
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterChips}
-      >
-        <Pressable
-          style={[styles.filterChip, inStockOnly && styles.filterChipActive]}
-          onPress={() => setInStockOnly((v) => !v)}
-        >
-          <Text style={[styles.filterChipText, inStockOnly && styles.filterChipTextActive]}>
-            In stock
-          </Text>
-        </Pressable>
-        {(
-          [
-            { id: 'featured', label: 'Featured' },
-            { id: 'price-asc', label: 'Price ↑' },
-            { id: 'price-desc', label: 'Price ↓' },
-          ] as const
-        ).map((s) => (
-          <Pressable
-            key={s.id}
-            style={[styles.filterChip, sort === s.id && styles.filterChipActive]}
-            onPress={() => setSort(s.id)}
-          >
-            <Text style={[styles.filterChipText, sort === s.id && styles.filterChipTextActive]}>
-              {s.label}
-            </Text>
-          </Pressable>
-        ))}
-        {categories.map((c) => (
-          <Pressable
-            key={c}
-            style={[styles.filterChip, category === c && styles.filterChipActive]}
-            onPress={() => setCategory((prev) => (prev === c ? null : c))}
-          >
-            <Text style={[styles.filterChipText, category === c && styles.filterChipTextActive]}>
-              {c}
-            </Text>
-          </Pressable>
-        ))}
-      </ScrollView>
-
-      {mode === 'sell' && (
-        <Pressable style={styles.postBtn} onPress={() => setShowSellForm(true)}>
-          <MaterialCommunityIcons name="plus-circle" size={20} color={palette.white} />
-          <Text style={styles.postBtnText}>Post a listing</Text>
-        </Pressable>
+      {catalogLoading ? (
+        <View style={styles.list}>
+          <View style={styles.gridRow}>
+            <ProductSkeleton />
+            <ProductSkeleton />
+          </View>
+          <View style={styles.gridRow}>
+            <ProductSkeleton />
+            <ProductSkeleton />
+          </View>
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          columnWrapperStyle={styles.gridRow}
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <Text style={styles.empty}>No items match your search.</Text>
+          }
+          renderItem={({ item }) => (
+            <ProductCard item={item} onPress={() => openInquiry(item)} />
+          )}
+        />
       )}
-
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        numColumns={2}
-        columnWrapperStyle={styles.gridRow}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <Text style={styles.empty}>No items match your search.</Text>
-        }
-        renderItem={({ item }) => (
-          <ProductCard item={item} onPress={() => openInquiry(item)} />
-        )}
-      />
 
       <ListingDetailSheet
         listing={selected}
@@ -797,14 +874,14 @@ export default function MarketplaceScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.surface.screen },
+  safe: { flex: 1, backgroundColor: palette.white },
   header: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.md,
     gap: 12,
   },
   headerText: { flex: 1 },
@@ -812,31 +889,27 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: palette.white,
-    borderWidth: 1,
-    borderColor: palette.border.light,
+    borderRadius: radius.sm,
+    backgroundColor: palette.surface.secondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   title: {
     fontFamily: Fonts.bold,
-    fontSize: 24,
+    fontSize: 26,
     color: palette.text.primary,
   },
   subtitle: {
     marginTop: 4,
     fontFamily: Fonts.regular,
-    fontSize: 14,
-    color: palette.text.muted,
+    fontSize: 13,
+    color: palette.text.tertiary,
   },
   cartBtn: {
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: palette.white,
-    borderWidth: 1,
-    borderColor: palette.border.light,
+    borderRadius: radius.sm,
+    backgroundColor: palette.surface.secondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -857,31 +930,35 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: palette.white,
   },
-  modeRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+  controls: {
+    paddingBottom: spacing.sm,
   },
-  modeChip: {
+  modeSegment: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    padding: 3,
+    borderRadius: radius.sm,
+    backgroundColor: palette.surface.secondary,
+  },
+  modeSegmentItem: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 10,
-    borderRadius: radius.pill,
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: radius.xs,
+  },
+  modeSegmentItemActive: {
     backgroundColor: palette.white,
-    borderWidth: 1,
-    borderColor: palette.border.light,
   },
-  modeChipActive: {
-    backgroundColor: palette.brandGreen,
-    borderColor: palette.brandGreen,
-  },
-  modeChipText: {
+  modeSegmentText: {
     fontFamily: Fonts.semiBold,
-    fontSize: 13,
-    color: palette.text.secondary,
+    fontSize: 14,
+    color: palette.text.tertiary,
   },
-  modeChipTextActive: { color: palette.white },
+  modeSegmentTextActive: {
+    color: palette.text.primary,
+  },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -890,10 +967,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: radius.md,
-    backgroundColor: palette.white,
-    borderWidth: 1,
-    borderColor: palette.border.card,
+    borderRadius: radius.sm,
+    backgroundColor: palette.surface.secondary,
   },
   searchInput: {
     flex: 1,
@@ -902,42 +977,95 @@ const styles = StyleSheet.create({
     color: palette.text.primary,
     padding: 0,
   },
-  filterChips: {
+  categorySection: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.border.light,
+  },
+  categoryTextRow: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
-    gap: 8,
+    gap: 22,
+    alignItems: 'flex-end',
   },
-  filterChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: palette.border.light,
-    backgroundColor: palette.white,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  categoryItem: {
+    alignItems: 'center',
+    paddingTop: 4,
+    minWidth: 28,
   },
-  filterChipActive: {
-    backgroundColor: palette.brandGreen,
-    borderColor: palette.brandGreen,
+  categoryText: {
+    fontFamily: Fonts.medium,
+    fontSize: 15,
+    letterSpacing: 0.1,
+    color: palette.text.tertiary,
+    paddingBottom: 10,
   },
-  filterChipText: {
+  categoryTextActive: {
     fontFamily: Fonts.semiBold,
+    color: palette.text.primary,
+  },
+  categoryIndicator: {
+    height: 2,
+    width: '100%',
+    borderRadius: 1,
+    backgroundColor: 'transparent',
+  },
+  categoryIndicatorActive: {
+    backgroundColor: palette.brandGreen,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: 2,
+    gap: 12,
+  },
+  metaCount: {
+    fontFamily: Fonts.medium,
+    fontSize: 12,
+    color: palette.text.tertiary,
+    flexShrink: 1,
+  },
+  metaActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  metaAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  metaActionText: {
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: palette.text.secondary,
   },
-  filterChipTextActive: { color: palette.white },
+  metaActionTextOn: {
+    color: palette.brandGreenDark,
+    fontFamily: Fonts.semiBold,
+  },
+  skeletonBlock: {
+    backgroundColor: palette.ui.skeleton,
+  },
+  skeletonLine: {
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: palette.ui.skeleton,
+  },
   postBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     marginHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
     paddingVertical: 12,
-    borderRadius: radius.md,
+    borderRadius: radius.sm,
     backgroundColor: palette.brandGreen,
   },
   postBtnText: {
-    fontFamily: Fonts.bold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: palette.white,
   },
@@ -959,21 +1087,16 @@ const styles = StyleSheet.create({
   card: {
     width: CARD_WIDTH,
     backgroundColor: palette.white,
-    borderRadius: 8,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: '#E3E6E6',
+    borderColor: palette.border.light,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 2,
   },
   cardPressed: {
-    opacity: 0.92,
+    opacity: 0.94,
   },
   imageArea: {
-    height: CARD_WIDTH * 0.85,
+    height: CARD_WIDTH * 0.88,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
@@ -988,27 +1111,27 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     left: 8,
-    backgroundColor: '#CC0C39',
-    paddingHorizontal: 6,
+    backgroundColor: palette.brandGreenDark,
+    paddingHorizontal: 7,
     paddingVertical: 3,
-    borderRadius: 3,
+    borderRadius: radius.xs,
     zIndex: 1,
   },
   dealBadge: {
-    backgroundColor: '#CC0C39',
+    backgroundColor: '#B42318',
   },
   badgeText: {
-    fontFamily: Fonts.bold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: palette.white,
   },
   cardBody: {
     paddingHorizontal: 10,
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 12,
   },
   cardTitle: {
-    fontFamily: Fonts.regular,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     lineHeight: 17,
     color: palette.text.primary,

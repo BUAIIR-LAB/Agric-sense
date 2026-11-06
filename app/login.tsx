@@ -84,17 +84,23 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
 
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <KeyboardAvoidingView
           style={styles.kav}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         >
           <ScrollView
+            style={styles.scroll}
             contentContainerStyle={styles.container}
-            showsVerticalScrollIndicator={false}
+            showsVerticalScrollIndicator
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            nestedScrollEnabled
+            bounces
+            automaticallyAdjustKeyboardInsets
           >
             <View style={styles.header}>
               <Pressable
@@ -102,7 +108,7 @@ export default function LoginScreen() {
                 onPress={() => router.replace('/')}
                 accessibilityLabel="Go back"
               >
-                <MaterialCommunityIcons name="arrow-left" size={24} color={palette.white} />
+                <MaterialCommunityIcons name="arrow-left" size={22} color={palette.text.primary} />
               </Pressable>
               <Text style={styles.headerTitle}>Sign In</Text>
             </View>
@@ -223,14 +229,15 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: palette.brandGreen },
+  root: { flex: 1, backgroundColor: palette.white },
   safeArea: { flex: 1 },
   kav: { flex: 1 },
-  container: { flexGrow: 1, paddingBottom: 32 },
+  scroll: { flex: 1 },
+  container: { flexGrow: 1, paddingBottom: 120 },
   header: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 16,
+    paddingBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -239,38 +246,40 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: palette.surface.secondary,
+    borderWidth: 1,
+    borderColor: palette.border.light,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
     fontFamily: Fonts.bold,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
-    color: palette.white,
+    color: palette.text.primary,
   },
   logoSection: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 8,
     paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 24,
+    paddingTop: 12,
+    paddingBottom: 20,
   },
   logoImage: {
-    width: 100,
-    height: 100,
+    width: 88,
+    height: 88,
   },
   appName: {
     fontFamily: Fonts.bold,
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '700',
-    color: palette.white,
+    color: palette.text.primary,
   },
   appTagline: {
     fontFamily: Fonts.regular,
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.85)',
+    fontSize: 15,
+    color: palette.text.tertiary,
   },
   form: {
     paddingHorizontal: 24,
@@ -283,18 +292,18 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bold,
     fontSize: 14,
     fontWeight: '600',
-    color: palette.white,
+    color: palette.text.secondary,
   },
   input: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: palette.input.background,
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 12,
     fontSize: 16,
-    color: palette.white,
+    color: palette.text.primary,
     fontFamily: Fonts.regular,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: palette.input.border,
   },
   passwordRow: {
     position: 'relative',
@@ -310,11 +319,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   inputFocused: {
-    borderColor: 'rgba(255,255,255,0.5)',
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderColor: palette.brandGreen,
+    backgroundColor: palette.input.backgroundFocused,
   },
   inputError: {
     borderColor: palette.danger,
+    backgroundColor: palette.input.backgroundError,
   },
   errorRow: {
     flexDirection: 'row',
@@ -327,38 +337,39 @@ const styles = StyleSheet.create({
     color: palette.danger,
   },
   submitButton: {
-    backgroundColor: palette.white,
+    backgroundColor: palette.brandGreen,
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
+    marginTop: 4,
   },
   submitDisabled: {
     opacity: 0.6,
   },
   submitLabel: {
     fontFamily: Fonts.bold,
-    color: palette.brandGreen,
+    color: palette.white,
     fontSize: 16,
     fontWeight: '600',
   },
   secondaryButton: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: palette.white,
     borderRadius: 12,
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderWidth: 1.5,
+    borderColor: palette.brandGreen,
   },
   secondaryLabel: {
     fontFamily: Fonts.bold,
-    color: palette.white,
+    color: palette.brandGreen,
     fontSize: 16,
     fontWeight: '600',
   },
   footerNote: {
     fontFamily: Fonts.regular,
     fontSize: 12,
-    color: 'rgba(255,255,255,0.7)',
+    color: palette.text.tertiary,
     textAlign: 'center',
     marginTop: 8,
   },

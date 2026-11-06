@@ -46,14 +46,14 @@ type HistoryListItem =
 const PAGE_SIZE = 15;
 
 function formatSyncLabel(timestamp: number | null, isSyncing: boolean): string {
-  if (isSyncing) return 'Syncing…';
-  if (!timestamp) return 'Saved on device';
+  if (isSyncing) return 'Syncing';
+  if (!timestamp) return 'Sync';
   const minutes = Math.floor((Date.now() - timestamp) / 60000);
-  if (minutes < 1) return 'Updated just now';
-  if (minutes < 60) return `Updated ${minutes}m ago`;
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `Updated ${hours}h ago`;
-  return 'Saved on device';
+  if (hours < 24) return `${hours}h ago`;
+  return 'Sync';
 }
 
 export default function HistoryScreen() {
@@ -404,22 +404,36 @@ export default function HistoryScreen() {
   const listHeader = (
     <View style={styles.headerBlock}>
       <View style={styles.titleRow}>
-        <View>
+        <View style={styles.titleBlock}>
           <Text style={styles.title}>Activity</Text>
-          <Text style={styles.subtitle}>Saved on your device · syncs in background</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>
+            Saved on device
+          </Text>
         </View>
-        <View style={styles.syncPill}>
+        <Pressable
+          style={styles.syncPill}
+          onPress={() => {
+            if (!isOffline && !isSyncingHistory) {
+              void syncHistoryFromAPI();
+            }
+          }}
+          disabled={isOffline || isSyncingHistory}
+          accessibilityRole="button"
+          accessibilityLabel="Sync history"
+        >
           {isSyncingHistory ? (
             <ActivityIndicator size="small" color={palette.brandGreen} />
           ) : (
             <MaterialCommunityIcons
-              name={isOffline ? 'cloud-off-outline' : 'cloud-check-outline'}
-              size={14}
+              name={isOffline ? 'cloud-off-outline' : 'cloud-sync-outline'}
+              size={16}
               color={isOffline ? palette.gray500 : palette.brandGreen}
             />
           )}
-          <Text style={styles.syncText}>{isOffline ? 'Offline' : formatSyncLabel(lastHistorySyncAt, isSyncingHistory)}</Text>
-        </View>
+          <Text style={styles.syncText} numberOfLines={1}>
+            {isOffline ? 'Offline' : formatSyncLabel(lastHistorySyncAt, isSyncingHistory)}
+          </Text>
+        </Pressable>
       </View>
 
       <View style={styles.statsRow}>
@@ -580,12 +594,17 @@ const styles = StyleSheet.create({
   titleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: spacing.md,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  titleBlock: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: spacing.sm,
   },
   title: {
     fontFamily: Fonts.bold,
-    fontSize: 28,
+    fontSize: 26,
     color: palette.charcoal,
   },
   subtitle: {
@@ -597,14 +616,15 @@ const styles = StyleSheet.create({
   syncPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
     backgroundColor: palette.white,
-    borderRadius: 20,
+    borderRadius: 18,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderWidth: 1,
     borderColor: palette.border.light,
-    maxWidth: 150,
+    flexShrink: 0,
+    maxWidth: 112,
   },
   syncText: {
     fontFamily: Fonts.medium,

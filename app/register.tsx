@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -210,13 +220,23 @@ export default function RegisterScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
 
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={styles.kav}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+        >
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.container}
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          nestedScrollEnabled
+          bounces
+          automaticallyAdjustKeyboardInsets
         >
           {/* Header */}
           <View style={styles.header}>
@@ -225,7 +245,7 @@ export default function RegisterScreen() {
               onPress={() => router.replace('/')}
               accessibilityLabel="Go back to home"
             >
-              <MaterialCommunityIcons name="arrow-left" size={24} color={palette.white} />
+              <MaterialCommunityIcons name="arrow-left" size={22} color={palette.text.primary} />
             </Pressable>
             <Text style={styles.headerTitle}>Create Account</Text>
           </View>
@@ -394,22 +414,23 @@ export default function RegisterScreen() {
             </Pressable>
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: palette.brandGreen },
+  root: { flex: 1, backgroundColor: palette.white },
   safeArea: { flex: 1 },
+  kav: { flex: 1 },
   scroll: { flex: 1 },
-  container: { paddingBottom: spacing.xxl * 2 },
+  container: { flexGrow: 1, paddingBottom: 140 },
 
-  // Header
   header: {
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
@@ -418,18 +439,19 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: palette.surface.secondary,
+    borderWidth: 1,
+    borderColor: palette.border.light,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
     fontFamily: Fonts.bold,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
-    color: palette.white,
+    color: palette.text.primary,
   },
 
-  // Form
   form: {
     paddingHorizontal: spacing.xl,
     gap: spacing.lg,
@@ -442,21 +464,22 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bold,
     fontSize: 14,
     fontWeight: '600',
-    color: palette.white,
+    color: palette.text.secondary,
   },
   input: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: palette.input.background,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     borderRadius: 12,
     fontSize: 16,
-    color: palette.white,
+    color: palette.text.primary,
     fontFamily: Fonts.regular,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: palette.input.border,
   },
   inputError: {
     borderColor: palette.danger,
+    backgroundColor: palette.input.backgroundError,
   },
   passwordRow: {
     position: 'relative',
@@ -477,7 +500,6 @@ const styles = StyleSheet.create({
     color: palette.danger,
   },
 
-  // Language
   languageGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -485,57 +507,55 @@ const styles = StyleSheet.create({
   },
   languageOption: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm + 2,
     borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.3)',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: palette.border.medium,
+    backgroundColor: palette.white,
   },
   languageSelected: {
-    borderColor: palette.white,
-    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderColor: palette.brandGreen,
+    backgroundColor: palette.tint[100],
   },
   languageLabel: {
     fontFamily: Fonts.regular,
-    color: palette.white,
+    color: palette.text.secondary,
     fontSize: 14,
     fontWeight: '500',
   },
   languageLabelSelected: {
-    color: palette.white,
+    color: palette.brandGreenDark,
     fontWeight: '600',
   },
 
-  // Chips
   chipGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
   chip: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.3)',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: palette.border.medium,
+    backgroundColor: palette.white,
   },
   chipSelected: {
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    borderColor: palette.white,
+    backgroundColor: palette.tint[100],
+    borderColor: palette.brandGreen,
   },
   chipLabel: {
     fontFamily: Fonts.regular,
     fontSize: 13,
-    color: palette.white,
+    color: palette.text.secondary,
     fontWeight: '500',
   },
   chipLabelSelected: {
-    color: palette.white,
+    color: palette.brandGreenDark,
     fontWeight: '600',
   },
 
-  // Location
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -551,7 +571,7 @@ const styles = StyleSheet.create({
   locationValue: {
     fontFamily: Fonts.regular,
     fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
+    color: palette.text.tertiary,
     flex: 1,
   },
   gpsButton: {
@@ -561,21 +581,20 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     borderRadius: 12,
-    backgroundColor: palette.white,
+    backgroundColor: palette.brandGreen,
   },
   gpsButtonDisabled: {
     opacity: 0.6,
   },
   gpsButtonLabel: {
     fontFamily: Fonts.bold,
-    color: palette.brandGreen,
+    color: palette.white,
     fontSize: 14,
     fontWeight: '600',
   },
 
-  // Submit Button
   submitButton: {
-    backgroundColor: palette.white,
+    backgroundColor: palette.brandGreen,
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
@@ -586,7 +605,7 @@ const styles = StyleSheet.create({
   },
   submitLabel: {
     fontFamily: Fonts.bold,
-    color: palette.brandGreen,
+    color: palette.white,
     fontSize: 16,
     fontWeight: '600',
   },

@@ -41,3 +41,8 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Local artifacts
+builds/
+Untitled
+.DS_Store
